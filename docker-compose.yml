@@ -1,0 +1,60 @@
+# Chạy toàn bộ hệ thống: cp .env.example .env  →  sửa .env  →  docker compose up -d --build
+name: sep-oi-em-xin-nghi
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sep}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Đặt POSTGRES_PASSWORD trong .env}
+      POSTGRES_DB: ${POSTGRES_DB:-sep}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      STORE: postgres
+      DATABASE_URL: postgres://${POSTGRES_USER:-sep}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sep}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Đặt ADMIN_PASSWORD trong .env}
+      SESSION_SECRET: ${SESSION_SECRET:?Đặt SESSION_SECRET trong .env}
+      OVERLAY_KEY: ${OVERLAY_KEY:?Đặt OVERLAY_KEY trong .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      TIKTOK_USERNAME: ${TIKTOK_USERNAME:-}
+      TIKTOK_SIGN_API_KEY: ${TIKTOK_SIGN_API_KEY:-}
+      HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Không mở cổng ra ngoài: chỉ Nginx truy cập được.
+    expose:
+      - "3000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_BIND:-127.0.0.1}:${PUBLIC_PORT:-8080}:80"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  pgdata:

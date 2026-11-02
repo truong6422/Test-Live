@@ -1,0 +1,26 @@
+{
+  "name": "@sep/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@sep/shared": "workspace:*",
+    "drizzle-orm": "^0.38.3",
+    "hono": "^4.6.16",
+    "postgres": "^3.4.5",
+    "tiktok-live-connector": "^2.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "drizzle-kit": "^0.30.1",
+    "typescript": "^5.7.3"
+  }
+}

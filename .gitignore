@@ -1,9 +1,6 @@
 node_modules/
-.venv/
-data/
 dist/
-embedded-assets.js
-.DS_Store
+.env
 *.log
-*.m4a
-public/assets/bg_chant.m4a
+.DS_Store
+coverage/

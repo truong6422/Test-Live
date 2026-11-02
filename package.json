@@ -1,16 +1,28 @@
 {
-  "name": "tiktok-live-temple-rpc",
-  "version": "1.0.0",
-  "description": "TikTok Live RPC Interactive Buddhist Temple (Bun.js + ZeroTTS giọng Mai Chi)",
-  "main": "server.js",
+  "name": "sep-oi-em-xin-nghi",
+  "private": true,
+  "version": "0.1.0",
+  "description": "SẾP ƠI EM XIN NGHỈ! — trò chơi văn phòng tương tác với TikTok LIVE (overlay OBS + dashboard)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "start": "bun run server.js",
-    "dev": "bun --watch server.js"
+    "dev": "bun run --filter '*' dev",
+    "dev:server": "bun run --cwd apps/server dev",
+    "dev:overlay": "bun run --cwd apps/overlay dev",
+    "dev:admin": "bun run --cwd apps/admin dev",
+    "build": "bun run --cwd apps/overlay build && bun run --cwd apps/admin build",
+    "start": "bun apps/server/src/index.ts",
+    "local": "bun run build && bun apps/server/src/index.ts",
+    "test": "bun test",
+    "typecheck": "bun run --cwd packages/shared typecheck && bun run --cwd apps/server typecheck && bun run --cwd apps/overlay typecheck && bun run --cwd apps/admin typecheck",
+    "db:generate": "bun run --cwd apps/server db:generate",
+    "db:migrate": "bun run --cwd apps/server db:migrate",
+    "sprites:staff": "bun scripts/extract-staff-sprites.ts"
   },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "tiktok-live-connector": "^2.1.0",
-    "ws": "^8.18.0"
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0"
   }
 }

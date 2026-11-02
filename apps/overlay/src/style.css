@@ -1,0 +1,351 @@
+:root {
+  --ink: #1f2430;
+  --paper: #fffaf0;
+  --accent: #ff6b35;
+  --calm: #2ec27e;
+  --stamina: #3584e4;
+  --strike: #e01b24;
+  font-family: 'Be Vietnam Pro', 'Segoe UI', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #111;
+}
+
+/* Sân khấu cố định 1080×1920, được scale vừa cửa sổ (OBS Browser Source đặt 1080×1920). */
+#stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1080px;
+  height: 1920px;
+  transform-origin: 0 0;
+  overflow: hidden;
+  background: #2b2f3a;
+}
+
+#scene,
+#scene canvas {
+  position: absolute;
+  inset: 0;
+  width: 1080px;
+  height: 1920px;
+}
+
+/* ---------------- HUD trên ---------------- */
+#hud-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 330px;
+  padding: 18px 36px 0;
+  background: linear-gradient(180deg, #1f2430 0%, #1f2430f0 82%, #1f243000 100%);
+  color: #fff;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 46px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  color: #ffd166;
+  text-shadow: 0 4px 0 #b4471c;
+  flex: 1;
+}
+
+.badge {
+  font-size: 26px;
+  font-weight: 800;
+  padding: 6px 14px;
+  border-radius: 10px;
+}
+.badge.demo {
+  background: #f5c211;
+  color: #3d2a00;
+}
+.badge.live {
+  background: #e01b24;
+}
+.badge.paused {
+  background: #77767b;
+}
+
+/* Điện thoại: thanh trên cùng của TikTok LIVE (avatar chủ live, số người xem) che ~170px đầu
+   → phần quan trọng (trạng thái Sếp) đặt thấp xuống, chữ to để đọc được trên màn hình nhỏ. */
+.boss-panel {
+  display: flex;
+  gap: 24px;
+  margin-top: 76px;
+  align-items: center;
+}
+
+.mood {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  min-width: 300px;
+}
+#mood-emoji {
+  font-size: 84px;
+  line-height: 1;
+}
+.mood .label {
+  font-size: 24px;
+  opacity: 0.75;
+}
+.mood .value {
+  font-size: 42px;
+  font-weight: 800;
+}
+
+.bars {
+  flex: 1;
+  display: grid;
+  gap: 10px;
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: 200px 1fr 64px;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+  font-weight: 700;
+}
+.bar-val {
+  text-align: right;
+  font-weight: 800;
+}
+.bar {
+  height: 32px;
+  background: #ffffff22;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.bar.big {
+  height: 34px;
+  border-radius: 17px;
+}
+.fill {
+  height: 100%;
+  width: 100%;
+  border-radius: inherit;
+  transition: width 400ms ease, background-color 400ms ease;
+}
+.fill.calm {
+  background: var(--calm);
+}
+.fill.stamina {
+  background: var(--stamina);
+}
+.fill.strike {
+  background: repeating-linear-gradient(45deg, #e01b24 0 22px, #c01c28 22px 44px);
+}
+
+.last-action {
+  margin-top: 12px;
+  font-size: 25px;
+  font-weight: 700;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.last-action b {
+  color: #ffd166;
+}
+
+/* ---------------- Toast hành động ---------------- */
+/* Thông báo hành động: góc trái dưới HUD (bên phải là bảng TOP PHÁ SẾP). */
+#toasts {
+  position: absolute;
+  top: 340px;
+  left: 20px;
+  width: 660px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 660px;
+  padding: 10px 22px;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 28px;
+  font-weight: 800;
+  box-shadow: 0 8px 0 #00000040;
+  animation: toast-in 260ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+.toast.out {
+  animation: toast-out 300ms ease both;
+}
+.toast .who {
+  color: var(--accent);
+}
+.toast.hint {
+  background: #2b2f3a;
+  color: #ffd166;
+  font-size: 26px;
+  border-radius: 20px;
+}
+.toast.hint .who {
+  color: #fff;
+}
+.toast.collective {
+  background: var(--strike);
+  color: #fff;
+}
+@keyframes toast-in {
+  from {
+    transform: translateY(-30px) scale(0.8);
+    opacity: 0;
+  }
+}
+@keyframes toast-out {
+  to {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+}
+
+.avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #ccc;
+  flex: none;
+}
+.avatar.small {
+  width: 44px;
+  height: 44px;
+}
+.avatar.initial {
+  display: inline-grid;
+  place-items: center;
+  font-weight: 900;
+  color: #fff;
+  background: #5e5c64;
+}
+
+/* ---------------- Bảng TOP PHÁ SẾP (ai tặng quà nhiều nhất phiên này) ---------------- */
+.board {
+  position: absolute;
+  top: 318px;
+  right: 16px;
+  width: 340px;
+  padding: 10px 12px 8px;
+  border-radius: 18px;
+  background: #1f2430e8;
+  border: 3px solid #ffd166;
+  color: #fff;
+  box-shadow: 0 6px 0 #00000055;
+  pointer-events: none;
+}
+.board-head {
+  font-size: 26px;
+  font-weight: 900;
+  color: #ffd166;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.board ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.board li {
+  display: grid;
+  grid-template-columns: 34px 44px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 24px;
+  font-weight: 800;
+}
+.board .rank {
+  font-size: 28px;
+  text-align: center;
+}
+.board .name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.board .gems {
+  color: #8ff0a4;
+}
+.board .empty {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  opacity: 0.85;
+  text-align: center;
+}
+
+/* ---------------- Sự kiện tập thể ----------------
+   Điện thoại: khung bình luận của TikTok che ~1/3 dưới màn hình → đặt khung đình công ngay trên các phòng ban. */
+#hud-bottom {
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  top: 838px;
+  color: #fff;
+  pointer-events: none;
+}
+.collective {
+  background: #1f2430e6;
+  border-radius: 20px;
+  padding: 16px 20px;
+}
+
+.collective-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 30px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.collective-desc {
+  font-size: 22px;
+  opacity: 0.75;
+  margin-top: 6px;
+}
+.collective.done .collective-head {
+  color: #ffd166;
+}
+
+
+#conn-error {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: #e01b24;
+  color: #fff;
+  font-size: 32px;
+  padding: 20px 30px;
+  border-radius: 16px;
+  font-weight: 800;
+}
