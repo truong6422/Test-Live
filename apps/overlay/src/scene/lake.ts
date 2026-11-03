@@ -455,7 +455,8 @@ export function buildLake(): SceneRefs {
     // trên đầu các VIP (người ngồi cao ≈ 68·scale, nón thêm chút), luôn dưới dải HUD trên (kết thúc ≈ y 560)
     vipSign.style.fontSize = 24;
     vipSign.style.stroke = { color: INK, width: 5 };
-    vipSign.position.set(540, Math.max(578, FRONT.feetY - 68 * (FRONT.scale || 1) - 40));
+    // ảnh cần thủ cao 84 đơn vị (gồm nón) → nhãn nằm hẳn trên đỉnh nón
+    vipSign.position.set(540, Math.min(578, FRONT.feetY - 84 * (FRONT.scale || 1) - 24));
   }
   bg.addChild(props, vipSign, gateSign);
   lake.addChild(bg);
@@ -553,11 +554,23 @@ export function buildLake(): SceneRefs {
   fade.visible = false;
   const banner = new Container();
   const bannerG = new Graphics();
-  block(bannerG, -340, -44, 680, 88, 0xffd166, INK, 6);
-  const bannerText = label('', { fontSize: 44, fill: INK });
+  const bannerText = label('', { fontSize: 44, fill: INK, align: 'center' });
   bannerText.anchor.set(0.5);
   banner.addChild(bannerG, bannerText);
-  banner.position.set(540, 820);
+  // giữa mặt hồ, dưới chiếu VIP (không che mặt người ngồi chiếu)
+  banner.position.set(540, 1010);
+  let bannerKey = '\u0000';
+  /** Khung băng rôn ôm theo chữ (1 hoặc 2 dòng), tối đa gần hết bề ngang hồ. */
+  const fitBanner = () => {
+    if (bannerText.text === bannerKey) return;
+    bannerKey = bannerText.text;
+    bannerText.scale.set(1);
+    if (bannerText.width > 760) bannerText.scale.set(760 / bannerText.width);
+    const w = Math.max(420, Math.ceil(bannerText.width) + 64);
+    const h = Math.ceil(bannerText.height) + 28;
+    bannerG.clear();
+    block(bannerG, -w / 2, -h / 2, w, h, 0xffd166, INK, 6);
+  };
   banner.visible = false;
   root.addChild(flashG, fade, banner);
 
@@ -738,6 +751,7 @@ export function buildLake(): SceneRefs {
       frame++;
       if (shake > 0) root.position.set((Math.random() - 0.5) * 2 * shake * 14, (Math.random() - 0.5) * 2 * shake * 10);
       if (underwater.root.visible) underwater.tick(dtMs);
+      if (banner.visible) fitBanner();
       if (!lake.visible) return;
       if (frame % 2 === 0) tickWater();
       king.tick(dtMs);

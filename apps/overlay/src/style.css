@@ -274,10 +274,10 @@ h1 {
   background: repeating-linear-gradient(45deg, #ff6b35 0 22px, #ffb347 22px 44px);
 }
 
-/* ---------------- Toast hành động (giữa, dưới các bảng) ---------------- */
+/* ---------------- Toast hành động (giữa, ngay dưới chiếu VIP — không che mặt người ngồi chiếu) ---------------- */
 #toasts {
   position: absolute;
-  top: 580px;
+  top: 812px;
   left: 50%;
   width: 720px;
   transform: translateX(-50%);

@@ -38,8 +38,9 @@ export function useImageGeometry(): void {
   // VIP to gấp ~1.6–1.8 lần người ngồi bờ: 5 ghế cách nhau ~75px trải hết sàn, chân trên sàn y≈735,
   // thân người nhô lên trên nền bờ xa (mong muốn); cần câu chĩa xuống nước ngay dưới mép sàn (y≈758).
   Object.assign(FRONT, { x0: 332, x1: 747, deckTop: 642, deckBottom: 758, feetY: 735, scale: 1.6 });
-  // cột trong (sát nước) ngồi trên dải cỏ x≈106 / 974, cột ngoài trên lối đất x≈58 / 1022
-  Object.assign(LAYOUT, { slanted: false, left: 132, right: 948, colDx: 48, edgeGap: 26 });
+  // cột trong ngồi sát mép nước x≈118 / 962 (chân thò ra mặt hồ), cột ngoài x≈48 / 1032 — đủ xa để ảnh người
+  // cột trong không đè lên người cột ngoài
+  Object.assign(LAYOUT, { slanted: false, left: 132, right: 948, colDx: 70, edgeGap: 14 });
 }
 
 /** Mép nước của bờ trái / phải tại độ cao y (vẽ tay: bờ hơi xiên cho có chiều sâu; ảnh nền: thẳng đứng). */
@@ -293,6 +294,7 @@ const SIDE_TIERS = [
   { cols: 2, rows: 12 } // tới 50 người (2 cột so le, 24 chỗ mỗi bên)
 ] as const;
 const PLATE_H = 16;
+const EMPTY_STOOL_ALPHA = 0.55;
 /** Chiều cao ảnh cần thủ (đơn vị trước scale, gồm cả ghế đẩu). */
 const SPRITE_H = 84;
 /** Nắm tay trên ảnh cần thủ (đơn vị, gốc = giữa mép dưới ảnh; đo trên anglers.png: ≈ +0.43 rộng, −0.6 cao). */
@@ -796,6 +798,9 @@ export class AnglerField implements Anglers {
     }
     tagBg.visible = false;
     if (tag) tag.visible = false;
+    // ghế trống: chỉ còn ghế đẩu mờ, không có bảng tên trắng trơn
+    plateBg.visible = false;
+    stool.alpha = EMPTY_STOOL_ALPHA;
 
     const kids: Container[] = [];
     if (glow) kids.push(glow);
@@ -880,6 +885,8 @@ export class AnglerField implements Anglers {
       if (seat.plate.width > max) seat.plate.scale.set((0.42 * max) / seat.plate.width);
     }
     seat.plateBg.tint = 0xffffff;
+    seat.plateBg.visible = true;
+    seat.stool.alpha = 1;
     const tag = m.follower ? TAG.official : TAG.rookie;
     const front = seat.view === 'face';
     const w = front ? Math.min(52, this.frontPlateW - 4) : 56;
@@ -905,6 +912,8 @@ export class AnglerField implements Anglers {
     seat.plate.text = '';
     if (seat.kgText) seat.kgText.text = '';
     seat.plateBg.tint = 0xd8c7a8;
+    seat.plateBg.visible = false;
+    seat.stool.alpha = EMPTY_STOOL_ALPHA;
     seat.tagBg.visible = false;
     if (seat.tag) seat.tag.visible = false;
   }

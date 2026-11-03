@@ -1,5 +1,6 @@
-import { Container, Graphics, GraphicsContext } from 'pixi.js';
+import { Container, Graphics, GraphicsContext, Sprite, type Texture } from 'pixi.js';
 import type { Mood } from '@cau/shared';
+import { bigFishTexture } from './assets';
 import type { KingLike } from './contract';
 import { drawGrid, INK, type Palette } from './pixel';
 import { clamp01, lerp } from './util';
@@ -104,6 +105,8 @@ export class King extends Container implements KingLike {
   private readonly submerged: boolean;
   private wrap = new Container();
   private body = new Graphics(bodyContext());
+  /** Ảnh cá thần (ô "pull_legend" của big-fish.png) — có ảnh thì thay thân cá vẽ pixel. */
+  private art: Sprite | null = null;
   private face = new Graphics();
   private whiskers = new Graphics();
   private shadowWrap: Container | null = null;
@@ -116,11 +119,17 @@ export class King extends Container implements KingLike {
   constructor(opts: { submerged?: boolean } = {}) {
     super();
     this.submerged = opts.submerged ?? true;
+    const tex = bigFishTexture('pull_legend');
     this.wrap.addChild(this.body, this.whiskers, this.face);
+    if (tex) {
+      this.art = artSprite(tex);
+      this.body.visible = this.whiskers.visible = this.face.visible = false;
+      this.wrap.addChild(this.art);
+    }
     if (this.submerged) {
       // bóng cá dưới nước (cùng hình, tô tối, mờ)
       this.shadowWrap = new Container();
-      const shadow = new Graphics(bodyContext());
+      const shadow = tex ? artSprite(tex) : new Graphics(bodyContext());
       shadow.tint = 0x173a4a;
       shadow.alpha = 0.4;
       this.shadowWrap.addChild(shadow);
@@ -145,6 +154,7 @@ export class King extends Container implements KingLike {
     if (m === this.mood) return;
     this.mood = m;
     this.body.tint = MOOD_TINT[m];
+    if (this.art) this.art.tint = MOOD_TINT[m];
     this.redrawFace();
   }
 
@@ -182,7 +192,7 @@ export class King extends Container implements KingLike {
         r.alpha = (1 - k) * (rise > 0.95 ? 0.3 : 0.9);
       });
     }
-    this.drawWhiskers(t, thrash);
+    if (!this.art) this.drawWhiskers(t, thrash);
   }
 
   private drawWhiskers(t: number, thrash: number): void {
@@ -222,6 +232,15 @@ export class King extends Container implements KingLike {
       g.rect(x, y, 12, 5).fill({ color: 0xff8fa8, alpha: 0.8 });
     }
   }
+}
+
+/** Ảnh cá to quay đầu sang PHẢI → lật cho đầu bên trái như cá vẽ pixel; vừa khung KING_W × KING_H (nhỉnh hơn chút). */
+function artSprite(tex: Texture): Sprite {
+  const s = new Sprite(tex);
+  s.anchor.set(0.5);
+  const k = Math.min((KING_W * 1.15) / tex.width, (KING_H * 1.6) / tex.height);
+  s.scale.set(-k, k);
+  return s;
 }
 
 function drawEye(g: Graphics, c: number, r: number, kind: Eye, red: boolean): void {
