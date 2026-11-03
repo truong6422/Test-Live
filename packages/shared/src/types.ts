@@ -251,6 +251,17 @@ export interface WorkEvent {
   catch?: { emoji: string; name: string; kg: number };
 }
 
+/**
+ * Bình luận thường của người xem (không khớp hành động / việc vui) → bong bóng chat trên đầu cần thủ.
+ * text đã qua bộ lọc từ (maskBlocked) ở normalizer.
+ */
+export interface ChatEvent {
+  platformId: string;
+  displayName: string;
+  text: string;
+  at: number;
+}
+
 // ----------------------------------------------------------------------------
 // Trạng thái
 // ----------------------------------------------------------------------------
@@ -464,6 +475,7 @@ export type ServerMessage =
   | { type: 'bigfish.next'; data: { at: number; shadowMs: number } }
   | { type: 'roster'; data: RosterMember[] }
   | { type: 'work'; data: WorkEvent }
+  | { type: 'chat'; data: ChatEvent }
   | { type: 'collective'; data: CollectiveState | null }
   | { type: 'connectors'; data: ConnectorInfo }
   | { type: 'game'; data: { running: boolean; sessionId: string | null } }

@@ -317,6 +317,7 @@ function restore(s: SceneRefs, b: Base): void {
   k.whisker = 1;
   k.bellyUp = b.bellyUp;
   k.alpha = b.kAlpha;
+  k.visible = false;
   k.setExpression(null);
   s.setShake(0);
   s.weather.setStorm(0);
@@ -550,6 +551,7 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
       const fightK = seg(p, FIGHT, BURST);
       const fighting = p >= FIGHT && p < BURST;
       const k = s.king;
+      if (isKing) k.visible = true;
 
       // ---------- băng rôn đầu ----------
       const top = tier.event ? `🐋 CÁ TO XUẤT HIỆN!\n${who} đang kéo...` : `🎣 ${run.actionName.toUpperCase()}\n${who}`;
@@ -626,8 +628,13 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
       }
       if (p >= BITE && p < FIGHT) for (let i = 0; i < 3; i++) ripple(water, F.x, F.y + 20, (ms / 700 + i / 3) % 1, 90 + lvl * 10);
       if (!isKing && p >= FIGHT - 0.04 && p < BURST) {
-        const len = tier.len * 0.9;
-        shadow.ellipse(hook.x - side * len * 0.2, hook.y + 30, len / 2, len * 0.14).fill({ color: 0x0b2238, alpha: 0.45 * seg(p, FIGHT - 0.04, FIGHT) });
+        // bóng tròn mép mềm dưới lưỡi câu (to theo bậc cá)
+        const rx = Math.min(120, 46 + tier.len * 0.12);
+        const a = seg(p, FIGHT - 0.04, FIGHT);
+        for (let i = 0; i < 5; i++) {
+          const k = 1 - i * 0.15;
+          shadow.ellipse(hook.x, hook.y + 30, rx * k, rx * 0.62 * k).fill({ color: 0x07141c, alpha: (0.14 + i * 0.03) * a });
+        }
       }
 
       // ---------- bọt nước + bong bóng ----------

@@ -328,6 +328,9 @@ export class GameEngine {
     }
     if (!match) {
       this.record(event, 'participated', null, describeEvent(event));
+      // bình luận thường → bong bóng chat trên đầu người câu
+      const text = event.kind === 'comment' ? event.text?.trim() : '';
+      if (text) this.emit({ type: 'chat', data: { platformId: player.platformId, displayName: player.displayName, text, at: now } });
       return 'participated';
     }
     const { action } = match;

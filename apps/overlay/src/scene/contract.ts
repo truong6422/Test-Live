@@ -1,5 +1,5 @@
 import type { Container, Graphics, Text } from 'pixi.js';
-import type { CatchEvent, Mood, RosterMember, RunningAction, WorkEvent } from '@cau/shared';
+import type { CatchEvent, ChatEvent, Mood, RosterMember, RunningAction, WorkEvent } from '@cau/shared';
 
 /**
  * HỢP ĐỒNG giữa phần dựng cảnh hồ câu (lake.ts, angler.ts, king.ts) và phần hoạt ảnh (animations.ts, director.ts).
@@ -58,6 +58,8 @@ export interface Anglers {
   sync(roster: RosterMember[]): void;
   /** Biểu cảm vui tại chỗ khi bình luận khớp "việc" (thay mồi, trà đá, hát...). */
   emote(e: WorkEvent): void;
+  /** Bình luận thường → bong bóng chat trên đầu người câu đó. */
+  chat(e: ChatEvent): void;
   /**
    * Chu kỳ câu tự động (mỗi 5s server gửi một lô): mỗi cần thủ giật cần, cá nhỏ bay lên + "x.xkg",
    * lệch pha ngẫu nhiên trong ~4s cho đỡ đồng loạt. Rác (kg = 0) thì nhân vật nhăn mặt.

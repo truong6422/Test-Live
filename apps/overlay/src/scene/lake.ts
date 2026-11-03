@@ -285,14 +285,13 @@ function buildBoat(): Container {
 // ---------------------------------------------------------------------------
 function buildShadow(): { root: Container; g: Graphics; rings: Graphics[] } {
   const root = new Container();
+  // Bóng tròn kiểu game câu cá: một vệt đen bầu dục mép mềm (nhiều lớp mờ chồng nhau, đậm dần vào tâm).
   const g = new Graphics();
-  for (let dy = -36; dy <= 36; dy += 6) {
-    const hw = Math.round((110 * Math.sqrt(1 - (dy / 40) ** 2)) / 6) * 6;
-    g.rect(-hw, dy, hw * 2, 6).fill(0x0b1f2a);
+  for (let i = 0; i < 6; i++) {
+    const k = 1 - i * 0.13;
+    g.ellipse(0, 0, 92 * k, 56 * k).fill({ color: 0x07141c, alpha: 0.16 + i * 0.03 });
   }
-  g.poly([96, 0, 170, -40, 156, 0, 170, 40]).fill(0x0b1f2a);
-  g.poly([-10, -30, 30, -58, 40, -30]).fill(0x0b1f2a);
-  g.alpha = 0.42;
+  g.alpha = 0.9;
   const ring = new GraphicsContext();
   for (let i = 0; i < 22; i++) {
     const a = (i / 22) * Math.PI * 2;
@@ -501,6 +500,8 @@ export function buildLake(): SceneRefs {
 
   const king = new King();
   king.position.set(LAKE_SPOTS.kingHome.x, LAKE_SPOTS.kingHome.y);
+  // Hồ bình thường không có cá to: Cá Thần chỉ hiện khi đang kéo Cá Thần (animations bật/tắt).
+  king.visible = false;
   lake.addChild(king);
 
   const waterFx = new Container();

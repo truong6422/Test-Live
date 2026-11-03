@@ -1,5 +1,5 @@
 import { BitmapText, Container, Graphics, GraphicsContext, Sprite, Text, Texture } from 'pixi.js';
-import { ROSTER_MAX, type CatchEvent, type RosterMember, type WorkEvent } from '@cau/shared';
+import { ROSTER_MAX, type CatchEvent, type ChatEvent, type RosterMember, type WorkEvent } from '@cau/shared';
 import { anglerTexture, smallFishTexture } from './assets';
 import { TAG_TEXT, type Anglers, type SeatSide, type Spot, type WalkerLike, type WalkerPose } from './contract';
 import { block, drawGrid, hash, INK, type Palette } from './pixel';
@@ -310,7 +310,9 @@ export function seatedPullPoints(spot: Spot): { hand: { x: number; y: number }; 
   return { hand: { x: spot.x + dir * h.x * spot.s, y: spot.y + h.y * spot.s }, headY: spot.y - SPRITE_H * spot.s };
 }
 const MAX_FLY = 36;
-const MAX_EMOTES = 10;
+const MAX_EMOTES = 14;
+/** Bình luận dài hơn thì cắt "…" (bong bóng tối đa ~2 dòng). */
+const CHAT_MAX = 40;
 const LINE_SIDE = 34;
 const LINE_FACE = 30;
 /** Phao chìm bao lâu trước khi giật cần. */
@@ -346,7 +348,7 @@ export class AnglerField implements Anglers {
   private pull = 0;
   private pending: { seat: Seat; e: CatchEvent; at: number }[] = [];
   private flies: Fly[] = [];
-  private emotes: { node: Container; until: number; born: number }[] = [];
+  private emotes: { node: Container; until: number; born: number; seat: Seat }[] = [];
 
   constructor(
     readonly layer: Container,
@@ -412,24 +414,43 @@ export class AnglerField implements Anglers {
 
   emote(e: WorkEvent, ms = 2600): void {
     const seat = this.byId.get(e.platformId) ?? this.spotOf(e.displayName);
-    if (!seat) return;
+    if (seat) this.bubble(seat, `${e.emoji} ${short(e.text, 24)}`, ms, true);
+  }
+
+  chat(e: ChatEvent, ms = 4500): void {
+    const seat = this.byId.get(e.platformId) ?? this.spotOf(e.displayName);
+    if (!seat || seat.away) return;
+    const text = [...e.text].length > CHAT_MAX ? `${short(e.text, CHAT_MAX - 1)}…` : e.text;
+    this.bubble(seat, text, ms, false);
+  }
+
+  /** Bong bóng thoại trên đầu một cần thủ (mỗi người một bong bóng — cái mới thay cái cũ). */
+  private bubble(seat: Seat, text: string, ms: number, bounce: boolean): void {
     const now = performance.now();
-    seat.emoteUntil = now + ms;
+    if (bounce) seat.emoteUntil = now + ms;
+    this.emotes = this.emotes.filter((x) => {
+      if (x.seat !== seat) return true;
+      x.node.destroy({ children: true });
+      return false;
+    });
     while (this.emotes.length >= MAX_EMOTES) this.emotes.shift()!.node.destroy({ children: true });
     const node = new Container();
     const t = new Text({
-      text: `${e.emoji} ${short(e.text, 24)}`,
-      style: { fontFamily: 'Segoe UI, Arial', fontSize: 20, fontWeight: '800', fill: INK }
+      text,
+      style: { fontFamily: 'Segoe UI, Arial', fontSize: 20, fontWeight: '800', fill: INK, wordWrap: true, wordWrapWidth: 230, align: 'center', lineHeight: 26 }
     });
     t.anchor.set(0.5);
-    const w = t.width + 20;
+    const w = Math.ceil(t.width) + 22;
+    const h = Math.ceil(t.height) + 12;
     const bg = new Graphics();
-    bg.rect(-w / 2 - 3, -19, w + 6, 38).fill(INK).rect(-w / 2, -16, w, 32).fill(0xffffff).rect(-6, 16, 12, 8).fill(INK);
+    // bong bóng bo tròn + đuôi nhọn chỉ xuống đầu người câu
+    bg.roundRect(-w / 2 - 3, -h / 2 - 3, w + 6, h + 6, 14).fill(INK).roundRect(-w / 2, -h / 2, w, h, 11).fill(0xffffff);
+    bg.poly([-8, h / 2 - 1, 8, h / 2 - 1, 0, h / 2 + 10]).fill(INK).poly([-5, h / 2 - 2, 5, h / 2 - 2, 0, h / 2 + 5]).fill(0xffffff);
     node.addChild(bg, t);
     const head = this.headTop(seat);
-    node.position.set(Math.max(w / 2 + 6, Math.min(1080 - w / 2 - 6, head.x)), head.y - 26);
+    node.position.set(Math.max(w / 2 + 6, Math.min(1080 - w / 2 - 6, head.x)), head.y - h / 2 - 14);
     this.fxLayer.addChild(node);
-    this.emotes.push({ node, until: now + ms, born: now });
+    this.emotes.push({ node, until: now + ms, born: now, seat });
   }
 
   catches(events: CatchEvent[]): void {

@@ -99,6 +99,9 @@ function handle(msg: ServerMessage): void {
     case 'work':
       scene.anglers.emote(msg.data);
       break;
+    case 'chat':
+      scene.anglers.chat(msg.data);
+      break;
     case 'collective':
       hud.collective(msg.data);
       break;
@@ -262,6 +265,15 @@ function preview(which: string): void {
       const ev: WorkEvent = { platformId: m.platformId, displayName: m.displayName, taskId: 'preview', emoji, text, at: Date.now(), points: 1 };
       handle({ type: 'work', data: ev });
     }, 7000);
+
+  // Bình luận thường → bong bóng chat trên đầu người câu.
+  const chats = ['Hello cả nhà 👋', 'Hôm nay cá cắn ghê', 'Cho xin con cá chép với', 'Câu lâu quá chưa được con nào 😭', 'Đẹp quá!', 'Ai câu giỏi nhất vậy?', 'Thả thính cá 😆'];
+  if (roster.length)
+    setInterval(() => {
+      const m = roster[Math.floor(Math.random() * roster.length)]!;
+      const text = chats[Math.floor(Math.random() * chats.length)]!;
+      handle({ type: 'chat', data: { platformId: m.platformId, displayName: m.displayName, text, at: Date.now() } });
+    }, 2300);
 
   // Cá to định kỳ: 30 giây một lần, bóng cá lượn 15 giây trước đó.
   const scheduleBigFish = () => handle({ type: 'bigfish.next', data: { at: Date.now() + 30_000, shadowMs: 15_000 } });
