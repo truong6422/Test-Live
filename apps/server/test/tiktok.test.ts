@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import type { NormalizedEvent } from '@sep/shared';
+import type { NormalizedEvent } from '@cau/shared';
 import { TikTokConnector, type LiveConnectionLike } from '../src/connectors/tiktok/tiktok-connector';
 import { silentLogger } from '../src/logger';
-import { cleanAvatarUrl, cleanDisplayName } from '../src/normalizer/sanitize';
+import { cleanAvatarUrl, cleanComment, cleanDisplayName } from '../src/normalizer/sanitize';
 import { parseTikTokUsername, TikTokNormalizer, type TtGift } from '../src/normalizer/tiktok-normalizer';
 
 // Mẫu dữ liệu theo hình dạng message của tiktok-live-connector 2.5 (tiktok-live-proto v3).
@@ -87,6 +87,9 @@ describe('TikTokNormalizer', () => {
     expect(cleanDisplayName('a‮b', 'x')).toBe('ab');
     expect(cleanDisplayName('Z̴̡̢a̵̧l̶g̷o', 'x')).toBe('Zalgo');
     expect(cleanAvatarUrl('javascript:alert(1)')).toBeUndefined();
+    // Từ tục bị che, từ thường gần giống (bỏ dấu trùng) thì giữ nguyên
+    expect(cleanDisplayName('Anh ĐM!! Câu', 'x')).toBe('Anh *** Câu');
+    expect(cleanComment('cá lớn các bác ơi vcl')).toBe('cá lớn các bác ơi ***');
     expect(cleanAvatarUrl('http://x/a.png')).toBeUndefined();
   });
 });

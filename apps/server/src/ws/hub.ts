@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from 'bun';
-import type { GameSnapshot, ServerMessage } from '@sep/shared';
+import type { GameSnapshot, ServerMessage } from '@cau/shared';
 
 export type Channel = 'overlay' | 'admin';
 export interface WsData {

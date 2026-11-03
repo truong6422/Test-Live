@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import type { BossConfig, CollectiveConfig, CollectiveState, EngineLimits, GameConfig, HistoryEntry, WorkTask } from '@sep/shared';
+import type { CollectiveConfig, CollectiveState, EngineLimits, FishingConfig, GameConfig, HistoryEntry, KingConfig, WorkTask } from '@cau/shared';
 import { reconcileConfig } from '../config/defaults';
 import * as s from '../db/schema';
 import type { PlayerRecord, SessionStat } from '../players/players';
@@ -33,7 +33,18 @@ export class PgStore implements GameStore {
       .insert(s.actions)
       .values(defaults.actions.map((a, i) => actionRow(a, i)))
       .onConflictDoNothing();
-    for (const [key, value] of Object.entries({ boss: defaults.boss, collective: defaults.collective, limits: defaults.limits, work: defaults.work })) {
+    // Bản cũ lưu cấu hình Cá Thần dưới khoá `boss`: chép sang `king` (nếu chưa có) trước khi chèn mặc định.
+    const [legacyKing] = await this.db.select().from(s.settings).where(eq(s.settings.key, 'boss'));
+    if (legacyKing) await this.db.insert(s.settings).values({ key: 'king', value: legacyKing.value }).onConflictDoNothing();
+    for (const [key, value] of Object.entries({
+      king: defaults.king,
+      fishing: defaults.fishing,
+      collective: defaults.collective,
+      limits: defaults.limits,
+      work: defaults.work,
+      // Bộ lọc từ: chỉ là một khoá trong bảng settings (key/value) — không cần migration.
+      blocklist: defaults.blocklist
+    })) {
       await this.db.insert(s.settings).values({ key, value }).onConflictDoNothing();
     }
     // Hành động do code quy định: xoá hành động cũ không còn hoạt ảnh, chuyển mapping quà của chúng,
@@ -64,8 +75,9 @@ export class PgStore implements GameStore {
         userCooldownMs: r.userCooldownMs,
         priority: r.priority,
         lanes: r.lanes,
-        bossEffect: r.bossEffect,
-        points: r.points
+        kingEffect: r.kingEffect,
+        points: r.points,
+        ...(r.fish ? { fish: r.fish } : {})
       })),
       gifts: giftRows.map((r) => ({
         giftId: r.giftId,
@@ -75,10 +87,13 @@ export class PgStore implements GameStore {
         minDiamonds: r.minDiamonds,
         enabled: r.enabled
       })),
-      boss: setting<BossConfig>('boss'),
+      king: setting<KingConfig>('king') ?? setting<KingConfig>('boss'),
+      fishing: setting<FishingConfig>('fishing'),
       collective: setting<CollectiveConfig>('collective'),
       limits: setting<EngineLimits>('limits'),
       work: setting<WorkTask[]>('work') ?? [],
+      // Thiếu (DB cũ) → reconcileConfig điền danh sách mặc định.
+      blocklist: setting<string[]>('blocklist'),
       // Thiếu key 'version' = cấu hình bản 1 (trước khi có đánh số phiên bản) → reconcileConfig nâng cấp một lần.
       version: setting<number>('version') ?? 1
     };
@@ -92,7 +107,8 @@ export class PgStore implements GameStore {
       }
       await tx.delete(s.giftMappings);
       if (cfg.gifts.length > 0) await tx.insert(s.giftMappings).values(cfg.gifts.map((g) => ({ ...g, minDiamonds: g.minDiamonds ?? 0 })));
-      const entries: Record<string, unknown> = { boss: cfg.boss, collective: cfg.collective, limits: cfg.limits, work: cfg.work };
+      const entries: Record<string, unknown> = { king: cfg.king, fishing: cfg.fishing, collective: cfg.collective, limits: cfg.limits, work: cfg.work };
+      if (Array.isArray(cfg.blocklist)) entries.blocklist = cfg.blocklist;
       if (cfg.version !== undefined) entries.version = cfg.version;
       for (const [key, value] of Object.entries(entries)) {
         await tx.insert(s.settings).values({ key, value }).onConflictDoUpdate({ target: s.settings.key, set: { value } });
@@ -110,6 +126,7 @@ export class PgStore implements GameStore {
       totalParticipations: r.totalParticipations,
       totalPoints: r.totalPoints,
       totalDiamonds: r.totalDiamonds,
+      totalGrams: r.totalGrams,
       actionCounts: r.actionCounts,
       grantedTitles: r.grantedTitles
     }));
@@ -130,6 +147,7 @@ export class PgStore implements GameStore {
           totalParticipations: p.totalParticipations,
           totalPoints: p.totalPoints,
           totalDiamonds: p.totalDiamonds ?? 0,
+          totalGrams: p.totalGrams ?? 0,
           actionCounts: p.actionCounts,
           grantedTitles: p.grantedTitles,
           title: p.title,
@@ -233,8 +251,9 @@ function actionRow(a: GameConfig['actions'][number], sortOrder: number) {
     userCooldownMs: a.userCooldownMs,
     priority: a.priority,
     lanes: a.lanes,
-    bossEffect: a.bossEffect,
+    kingEffect: a.kingEffect,
     points: a.points,
+    fish: a.fish ?? null,
     sortOrder
   };
 }

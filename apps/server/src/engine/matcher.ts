@@ -6,7 +6,7 @@ import {
   type GiftPayload,
   type NormalizedEvent,
   type WorkTask
-} from '@sep/shared';
+} from '@cau/shared';
 
 export interface MatchResult {
   action: ActionConfig;

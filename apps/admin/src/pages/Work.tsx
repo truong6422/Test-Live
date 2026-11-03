@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { GameConfig, WorkTask } from '@sep/shared';
+import type { GameConfig, WorkTask } from '@cau/shared';
 import { api } from '../api';
 import type { Notify, Run } from '../App';
 
@@ -37,7 +37,7 @@ const toRow = (t: WorkTask): Row => ({
   userCooldownMs: t.userCooldownMs
 });
 
-/** "Pha cà phê" → "pha_ca_phe". */
+/** "Thay mồi" → "thay_moi". */
 export function slugify(s: string): string {
   return s
     .normalize('NFD')
@@ -115,7 +115,7 @@ export function WorkPage({
         if (r.key !== key) return r;
         const next = { ...r, ...patch };
         // Dòng mới: id tự sinh theo tên cho tới khi người dùng tự sửa id.
-        if (next.isNew && !next.idTouched && patch.name !== undefined) next.id = uniqueId(slugify(next.name) || 'cong_viec', rs, key);
+        if (next.isNew && !next.idTouched && patch.name !== undefined) next.id = uniqueId(slugify(next.name) || 'viec_cau', rs, key);
         return next;
       })
     );
@@ -125,16 +125,16 @@ export function WorkPage({
       ...rs,
       {
         key: `k${keySeq++}`,
-        id: uniqueId('cong_viec_moi', rs),
+        id: uniqueId('viec_cau_moi', rs),
         isNew: true,
         idTouched: false,
-        name: 'Công việc mới',
+        name: 'Việc câu mới',
         enabled: true,
         keywords: '',
-        emoji: '💼',
+        emoji: '🎣',
         text: '',
         points: 1,
-        userCooldownMs: 30_000
+        userCooldownMs: 20_000
       }
     ]);
 
@@ -145,22 +145,22 @@ export function WorkPage({
       notify(`Có ${errs.length} lỗi, chưa lưu`, 'error');
       return;
     }
-    return run(() => api.updateWork(rows.map(fromRow)).then(reloadConfig), 'Đã lưu công việc');
+    return run(() => api.updateWork(rows.map(fromRow)).then(reloadConfig), 'Đã lưu việc câu');
   };
 
   return (
     <div className="stack">
-      <h1>Công việc</h1>
+      <h1>Việc câu</h1>
       <p className="muted">
-        Công việc miễn phí: người xem gõ bình luận để nhân vật của họ làm việc tại chỗ, được cộng điểm — giữ chân người xem. Không ảnh
-        hưởng Sếp.
+        Việc câu miễn phí: người xem gõ bình luận để cần thủ của họ diễn biểu cảm vui ngay tại chỗ (thay mồi, uống trà đá, hát hò…), được cộng
+        điểm — giữ chân người xem. Không ảnh hưởng Cá Thần. Câu cá tự động và bảng cá nằm ở tab <b>Câu cá</b>.
       </p>
       <p className="muted">
         Từ khoá so khớp không dấu, theo nguyên từ (giống trang Hành động). Hồi chiêu tính riêng cho từng người xem.
       </p>
       {rows.length === 0 && (
         <section className="card">
-          <p className="muted">Chưa có công việc nào.</p>
+          <p className="muted">Chưa có việc câu nào.</p>
         </section>
       )}
       {rows.map((r) => (
@@ -195,14 +195,14 @@ export function WorkPage({
             ) : null}
             <label className="span2">
               Từ khoá bình luận (phân tách bằng dấu phẩy)
-              <input value={r.keywords} onChange={(e) => update(r.key, { keywords: e.target.value })} placeholder="vd: lam viec, go phim" />
+              <input value={r.keywords} onChange={(e) => update(r.key, { keywords: e.target.value })} placeholder="vd: cau, quang can" />
             </label>
             <label>
               Emoji
               <input value={r.emoji} maxLength={8} onChange={(e) => update(r.key, { emoji: e.target.value })} />
             </label>
             <label className="span2">
-              Câu nhân vật nói (≤ 80 ký tự)
+              Câu cần thủ nói (≤ 80 ký tự)
               <input value={r.text} maxLength={80} onChange={(e) => update(r.key, { text: e.target.value })} />
             </label>
             <label>
@@ -233,7 +233,7 @@ export function WorkPage({
         </section>
       )}
       <div className="row">
-        <button onClick={add}>+ Thêm công việc</button>
+        <button onClick={add}>+ Thêm việc câu</button>
         <button className="primary" onClick={save}>
           Lưu tất cả
         </button>
@@ -260,3 +260,4 @@ function uniqueId(base: string, rows: Row[], exceptKey?: string): string {
     if (!taken.has(id)) return id;
   }
 }
+

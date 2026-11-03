@@ -1,4 +1,4 @@
-import type { ConnectorStatus, NormalizedEvent } from '@sep/shared';
+import type { ConnectorStatus, NormalizedEvent } from '@cau/shared';
 
 export type ConnectorEventListener = (event: NormalizedEvent) => void;
 

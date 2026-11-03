@@ -1,20 +1,21 @@
-import type { NormalizedEvent } from '@sep/shared';
+import type { NormalizedEvent } from '@cau/shared';
 import type { ConnectorEventListener } from '../types';
 
-const FIRST = ['Lan', 'Hùng', 'Mai', 'Tuấn', 'Linh', 'Phát', 'Hà', 'Nam', 'Thảo', 'Quân', 'Vy', 'Đức'];
-const ROLE = ['Kế Toán', 'IT', 'Nhân Sự', 'Sales', 'Marketing', 'Thực Tập', 'Hành Chính', 'Dev', 'Design', 'Kho'];
-/** 120 tên giả để thử overlay đông người. */
-const DEMO_STAFF = FIRST.flatMap((f) => ROLE.map((r) => `${f} ${r}`));
+const PREFIX = ['Chú', 'Bác', 'Anh', 'Cô', 'Ông', 'Bé', 'Thím', 'Cậu', 'Chị', 'Dì'];
+const NAME = ['Tư', 'Ba', 'Sáu', 'Bảy', 'Hai', 'Năm', 'Tám', 'Út', 'Tí', 'Tèo', 'Lành'];
+const NICK = ['Câu Rô', 'Cần Trúc', 'Bến Sậy', 'Mồi Giun', 'Lưỡi Kép', 'Phao Đỏ'];
+/** ~110 tên giả kiểu cần thủ để thử hồ đông người ("Chú Tư Câu Rô"…). */
+const DEMO_ANGLERS = PREFIX.flatMap((p, i) => NAME.map((n, j) => `${p} ${n} ${NICK[(i + j) % NICK.length]}`));
 
-/** Bình luận demo: công việc miễn phí + tán gẫu (trêu Sếp giờ chỉ bằng quà). */
+/** Bình luận demo: việc vui + tán gẫu (bình luận bất kỳ là vào hồ câu). */
 const DEMO_COMMENTS = [
-  'làm việc thôi', 'nộp báo cáo', 'tăng ca', 'pha cà phê', 'xin nghỉ', 'họp nhóm', 'chạy deadline', 'báo cáo đây',
-  'hello cả nhà', 'em xin nghỉ phép', 'deadline dí quá', 'sếp đâu rồi', 'haha', 'đình công!!!',
-  'tặng quà phá sếp nào', 'sếp ơi em xin nghỉ'
+  'câu thôi', 'thay mồi', 'móc mồi giun', 'trà đá nào', 'uống trà', 'nghỉ chút', 'khoe cá nè', 'sống ảo tí', 'check in hồ',
+  'hát hò cho cá nghe', 'ca hát nào', 'buồn ngủ quá', 'ngủ gật mất', 'hello cả hồ', 'cá cắn câu chưa', 'kéo cá to đi',
+  'haha', 'hôm nay được mùa', 'phao nhúc nhích kìa'
 ];
 
 /**
- * Quà demo với giá trị kim cương gần đúng TikTok, để chế độ demo chạy qua mọi bậc trêu Sếp.
+ * Quà demo với giá trị kim cương gần đúng TikTok, để chế độ demo chạy qua mọi bậc kéo cá to.
  * `weight` = tần suất tương đối (quà rẻ xuất hiện nhiều hơn).
  */
 const DEMO_GIFTS = [
@@ -45,7 +46,7 @@ const pick = <T>(arr: readonly T[], rnd: () => number): T => arr[Math.floor(rnd(
 /**
  * Chế độ demo: sinh sự kiện giả lập để thử overlay + engine khi không có TikTok LIVE.
  * Mọi sự kiện đều mang source = 'demo' và user ID tiền tố 'demo:' — không bao giờ giả làm sự kiện TikTok,
- * không được lưu vào bảng nhân viên, và overlay hiện nhãn DEMO khi chế độ này bật.
+ * không được lưu vào bảng cần thủ, và overlay hiện nhãn DEMO khi chế độ này bật.
  */
 export class DemoConnector {
   readonly name = 'demo';
@@ -53,7 +54,7 @@ export class DemoConnector {
   private listeners: ConnectorEventListener[] = [];
   private seq = 0;
   /** Người xem demo đã follow (1/3 có sẵn, số còn lại follow dần qua sự kiện follow). */
-  private followers = new Set(DEMO_STAFF.map((_, i) => i).filter((i) => i % 3 === 0));
+  private followers = new Set(DEMO_ANGLERS.map((_, i) => i).filter((i) => i % 3 === 0));
 
   constructor(
     private intervalMs = 1200,
@@ -81,11 +82,11 @@ export class DemoConnector {
   /** Sinh một sự kiện (public để test). */
   next(now = Date.now()): NormalizedEvent {
     this.seq += 1;
-    const idx = Math.floor(this.rnd() * DEMO_STAFF.length);
+    const idx = Math.floor(this.rnd() * DEMO_ANGLERS.length);
     const user = {
       platformId: `demo:${idx}`,
       username: `demo_${idx}`,
-      displayName: DEMO_STAFF[idx]!,
+      displayName: DEMO_ANGLERS[idx]!,
       follower: this.followers.has(idx)
     };
     const base = { id: `demo:${now}:${this.seq}`, source: 'demo' as const, user, receivedAt: now };

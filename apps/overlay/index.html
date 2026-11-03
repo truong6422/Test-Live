@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="referrer" content="no-referrer" />
-    <title>Sếp Ơi Em Xin Nghỉ! — Overlay</title>
+    <title>ĐI CÂU THÔI! — Overlay</title>
   </head>
   <body>
     <div id="stage">
@@ -12,52 +12,40 @@
 
       <header id="hud-top">
         <div class="title-row">
-          <h1>SẾP ƠI EM XIN NGHỈ!</h1>
+          <h1>🎣 ĐI CÂU THÔI!</h1>
           <span id="badge-demo" class="badge demo" hidden>DEMO</span>
           <span id="badge-live" class="badge live" hidden>● LIVE</span>
           <span id="badge-paused" class="badge paused" hidden>TẠM DỪNG</span>
         </div>
-        <div class="boss-panel">
-          <div class="mood">
-            <span id="mood-emoji">🙂</span>
-            <div>
-              <div class="label">Trạng thái Sếp</div>
-              <div id="mood-label" class="value">Bình thường</div>
-            </div>
-          </div>
-          <div class="bars">
-            <div class="bar-row">
-              <span class="bar-label">Độ bình tĩnh</span>
-              <div class="bar"><div id="bar-calm" class="fill calm"></div></div>
-              <span id="val-calm" class="bar-val">100</span>
-            </div>
-            <div class="bar-row">
-              <span class="bar-label">Sức chịu đựng</span>
-              <div class="bar"><div id="bar-stamina" class="fill stamina"></div></div>
-              <span id="val-stamina" class="bar-val">100</span>
-            </div>
-          </div>
+        <div id="demo-ribbon" class="demo-ribbon" hidden>CHẾ ĐỘ DEMO · dữ liệu giả lập, không phải người xem thật</div>
+        <div class="info-row">
+          <span id="bigfish" class="bigfish" hidden>🐋 <span id="bigfish-text">Cá to xuất hiện sau 03:00</span></span>
+          <div id="last-action" class="last-action">💬 Bình luận bất kỳ để thả câu · 🎁 Mỗi món quà có một loài cá riêng</div>
         </div>
-        <div id="last-action" class="last-action">🎁 Tặng quà để trêu Sếp · 💬 Bình luận để làm việc</div>
+        <div class="disclaimer">Điểm chỉ để vui, không quy đổi</div>
       </header>
 
+      <div id="boards">
+        <aside class="board kg">
+          <div class="board-head">⚖️ BẢNG CÂN CÁ</div>
+          <ol id="kg-list"></ol>
+        </aside>
+        <aside class="board gift">
+          <div class="board-head">🎁 TOP QUÀ TẶNG</div>
+          <ol id="gift-list"></ol>
+        </aside>
+      </div>
+
+      <section id="collective" class="collective" hidden>
+        <div class="collective-head">
+          <span id="collective-name">🪢 Cả hồ kéo Cá Thần</span>
+          <span id="collective-count">0 / 100</span>
+        </div>
+        <div class="bar big"><div id="collective-fill" class="fill haul"></div></div>
+        <div id="collective-desc" class="collective-desc"></div>
+      </section>
+
       <div id="toasts"></div>
-
-      <aside id="board" class="board">
-        <div class="board-head">🏆 TOP PHÁ SẾP</div>
-        <ol id="board-list"></ol>
-      </aside>
-
-      <footer id="hud-bottom">
-        <section id="collective" class="collective" hidden>
-          <div class="collective-head">
-            <span id="collective-name">Đình công toàn công ty</span>
-            <span id="collective-count">0 / 100</span>
-          </div>
-          <div class="bar big"><div id="collective-fill" class="fill strike"></div></div>
-          <div id="collective-desc" class="collective-desc"></div>
-        </section>
-      </footer>
 
       <div id="conn-error" hidden></div>
     </div>

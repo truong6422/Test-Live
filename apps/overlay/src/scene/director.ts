@@ -1,6 +1,6 @@
-import type { Mood, RunningAction } from '@sep/shared';
+import type { Mood, RunningAction } from '@cau/shared';
 import { createAnim, type ActionAnim } from './animations';
-import type { SceneRefs } from './office';
+import type { SceneRefs } from './contract';
 
 interface Playing {
   run: RunningAction;

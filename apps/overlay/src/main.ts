@@ -1,11 +1,10 @@
-import { Application, Assets, Rectangle, Texture } from 'pixi.js';
-import type { BossState, RosterMember, RunningAction, ServerMessage } from '@sep/shared';
+import { Application } from 'pixi.js';
+import type { CatchEvent, LeaderboardEntry, RosterMember, RunningAction, ServerMessage, WorkEvent } from '@cau/shared';
 import { Hud } from './hud';
 import { ANIMATIONS, PREVIEW_DURATIONS } from './scene/animations';
-import { BOSS_CLIPS, BOSS_POSES, setBossClips, setBossSprites, type BossClip, type BossPose } from './scene/boss';
+import { loadAssets } from './scene/assets';
 import { Director } from './scene/director';
-import { buildOffice } from './scene/office';
-import { setStaffSprites, STAFF_POSES, type StaffCharacter, type StaffPoseMap } from './scene/people';
+import { buildLake } from './scene/lake';
 import './style.css';
 
 const params = new URLSearchParams(location.search);
@@ -19,105 +18,28 @@ function fitStage(): void {
 window.addEventListener('resize', fitStage);
 fitStage();
 
-/** Tải ảnh Sếp. Lỗi/thiếu ảnh nào thì bỏ qua — Sếp vẽ pixel sẵn làm dự phòng. */
-async function loadBossSprites(): Promise<void> {
-  const base = `${import.meta.env.BASE_URL}sprites/boss/`;
-  const loaded: Partial<Record<BossPose, Texture>> = {};
-  await Promise.all(
-    BOSS_POSES.map(async (p) => {
-      try {
-        const tex = await Assets.load<Texture>(`${base}${p}.png`);
-        tex.source.scaleMode = 'nearest'; // pixel art: giữ nét, không nhoè
-        loaded[p] = tex;
-      } catch {
-        /* dùng hình dự phòng */
-      }
-    })
-  );
-  if (loaded.cold) setBossSprites(loaded);
-}
-
-
-/** Tải hoạt ảnh từng khung của Sếp: mỗi hoạt ảnh là 1 dải PNG, cắt thành các khung (không tốn thêm bộ nhớ). */
-async function loadBossClips(): Promise<void> {
-  const base = `${import.meta.env.BASE_URL}sprites/boss-anim/`;
-  try {
-    const res = await fetch(`${base}manifest.json`);
-    if (!res.ok) return;
-    const manifest = (await res.json()) as Record<string, { frameW: number; frameH: number; frames: number }>;
-    const loaded: Partial<Record<BossClip, Texture[]>> = {};
-    await Promise.all(
-      BOSS_CLIPS.map(async (name) => {
-        const m = manifest[name];
-        if (!m) return;
-        try {
-          const strip = await Assets.load<Texture>(`${base}${name}.png`);
-          strip.source.scaleMode = 'nearest';
-          loaded[name] = Array.from(
-            { length: m.frames },
-            (_, i) => new Texture({ source: strip.source, frame: new Rectangle(i * m.frameW, 0, m.frameW, m.frameH) })
-          );
-        } catch {
-          /* thiếu hoạt ảnh này → dùng ảnh tư thế */
-        }
-      })
-    );
-    setBossClips(loaded);
-  } catch {
-    /* không có hoạt ảnh → dùng ảnh tư thế / hình vẽ */
-  }
-}
-
-/**
- * Tải sprite nhân viên (bun run sprites:staff): mỗi nhân vật 1 dải PNG, cắt thành khung dùng chung source.
- * Thiếu manifest/ảnh → giữ người vẽ pixel.
- */
-async function loadStaffSprites(): Promise<void> {
-  const base = `${import.meta.env.BASE_URL}sprites/staff/`;
-  try {
-    const res = await fetch(`${base}manifest.json`);
-    if (!res.ok) return;
-    const manifest = (await res.json()) as {
-      characters: { id: string; frameW: number; frameH: number; frames: number; boxes?: number[][] }[];
-      poses: Partial<StaffPoseMap>;
-    };
-    if (!STAFF_POSES.every((p) => manifest.poses[p] !== undefined)) return;
-    const chars = await Promise.all(
-      manifest.characters.map(async (m): Promise<StaffCharacter | null> => {
-        try {
-          const strip = await Assets.load<Texture>(`${base}${m.id}.png`);
-          strip.source.scaleMode = 'nearest';
-          const frames = Array.from(
-            { length: m.frames },
-            (_, i) => new Texture({ source: strip.source, frame: new Rectangle(i * m.frameW, 0, m.frameW, m.frameH) })
-          );
-          const boxes = m.boxes ?? frames.map(() => [0, 0, m.frameW, m.frameH]);
-          return { frames, boxes, frameW: m.frameW, frameH: m.frameH };
-        } catch {
-          return null;
-        }
-      })
-    );
-    setStaffSprites(
-      chars.filter((c): c is StaffCharacter => c !== null),
-      manifest.poses as StaffPoseMap
-    );
-  } catch {
-    /* không có sprite → người vẽ pixel */
-  }
-}
-
 // Nhẹ máy: không khử răng cưa (pixel art không cần), độ phân giải 1, giới hạn 30 khung hình/giây.
 const app = new Application();
 await app.init({ width: 1080, height: 1920, antialias: false, background: 0x2b2f3a, resolution: 1, roundPixels: true });
 app.ticker.maxFPS = Number(params.get('fps')) || 30;
 document.getElementById('scene')!.appendChild(app.canvas);
 
-await Promise.all([loadBossSprites(), loadBossClips(), loadStaffSprites()]);
-const scene = buildOffice();
+// Ảnh tuỳ chọn (nền hồ, ảnh cá to) — thiếu thì vẽ pixel bằng code.
+await loadAssets();
+const scene = buildLake();
 app.stage.addChild(scene.root);
 const director = new Director(scene);
 const hud = new Hud();
+
+/** Bóng cá to lượn dưới hồ trong khoảng [nextBigFishAt - shadowMs, nextBigFishAt) (giờ server). */
+const bigFish = { at: 0, shadowMs: 0, clockOffset: 0, active: false };
+function updateShadow(): void {
+  const now = Date.now() + bigFish.clockOffset;
+  const on = !bigFish.active && bigFish.at > 0 && bigFish.shadowMs > 0 && now >= bigFish.at - bigFish.shadowMs && now < bigFish.at;
+  scene.bigFishShadow.show(on);
+}
+setInterval(updateShadow, 500);
+
 app.ticker.add((t) => director.tick(t.deltaMS));
 
 function handle(msg: ServerMessage): void {
@@ -125,39 +47,57 @@ function handle(msg: ServerMessage): void {
     case 'snapshot': {
       const s = msg.data;
       director.syncClock(s.serverTime);
-      scene.classroom.sync(s.roster ?? []);
+      bigFish.clockOffset = s.serverTime - Date.now();
+      scene.anglers.sync(s.roster ?? []);
       director.reset(s.runningActions);
-      director.setMood(s.boss.mood);
-      hud.boss(s.boss);
+      director.setMood(s.king.mood);
       hud.feed(s.feed);
-      hud.leaderboard(s.leaderboard, s.participants);
+      hud.leaderboard(s.leaderboard, s.participants, s.kgBoard ?? []);
       hud.collective(s.collective);
       hud.connectors(s.connectors);
       hud.running(s.running);
+      bigFish.at = s.nextBigFishAt ?? 0;
+      bigFish.shadowMs = s.bigFishShadowMs ?? 0;
+      bigFish.active = s.runningActions.some((r) => r.actionId === 'big_fish_event');
+      hud.bigFishNext(bigFish.at);
+      updateShadow();
       break;
     }
     case 'action.started':
       director.start(msg.data);
       hud.actionStarted(msg.data);
+      if (msg.data.actionId === 'big_fish_event') {
+        bigFish.active = true;
+        updateShadow();
+      }
       break;
     case 'action.ended':
       director.end(msg.data.runId);
+      if (msg.data.actionId === 'big_fish_event') bigFish.active = false;
       break;
-    case 'boss':
+    case 'king':
       director.setMood(msg.data.mood);
-      hud.boss(msg.data);
       break;
     case 'feed':
       hud.feed(msg.data);
       break;
     case 'leaderboard':
-      hud.leaderboard(msg.data.entries, msg.data.participants);
+      hud.leaderboard(msg.data.entries, msg.data.participants, msg.data.kgBoard ?? []);
       break;
     case 'roster':
-      scene.classroom.sync(msg.data);
+      scene.anglers.sync(msg.data);
+      break;
+    case 'catches':
+      scene.anglers.catches(msg.data);
+      break;
+    case 'bigfish.next':
+      bigFish.at = msg.data.at;
+      bigFish.shadowMs = msg.data.shadowMs ?? 0;
+      hud.bigFishNext(msg.data.at);
+      updateShadow();
       break;
     case 'work':
-      scene.classroom.emote(msg.data);
+      scene.anglers.emote(msg.data);
       break;
     case 'collective':
       hud.collective(msg.data);
@@ -196,107 +136,137 @@ function connect(key: string, attempt = 0): void {
 
 /**
  * Chế độ xem trước hoạt ảnh không cần server (chỉ để dựng/kiểm tra giao diện):
- *   /overlay/?preview=all            chạy lần lượt mọi hoạt ảnh
- *   /overlay/?preview=flat_tire      một hoạt ảnh
- *   &people=100                      số nhân viên giả để thử bố cục (mặc định 24)
+ *   /overlay/?preview=all              chạy lần lượt mọi hoạt ảnh kéo cá
+ *   /overlay/?preview=pull_legend      một hoạt ảnh
+ *   &people=50                         số cần thủ giả để thử bố cục (mặc định 20)
  */
-/** Tên + tác động lên Sếp của từng hành động (khớp defaults.ts của server) — chỉ dùng cho xem trước. */
-const PREVIEW_INFO: Record<string, { name: string; calm: number; stamina: number }> = {
-  throw_paper: { name: 'Ném giấy vào Sếp', calm: -4, stamina: -2 },
-  pluck_tree: { name: 'Vặt lá cây phát tài', calm: -7, stamina: -3 },
-  doodle_kpi: { name: 'Vẽ bậy lên bảng KPI', calm: -8, stamina: -3 },
-  flat_tire: { name: 'Xịt lốp xe Sếp', calm: -10, stamina: -5 },
-  lock_toilet: { name: 'Khóa nhà vệ sinh', calm: -12, stamina: -8 },
-  crash_pc: { name: 'Làm treo máy tính Sếp', calm: -8, stamina: -4 },
-  complaint_call: { name: 'Khách gọi phàn nàn', calm: -9, stamina: -3 },
-  praise_boss: { name: 'Nịnh Sếp', calm: 6, stamina: 2 },
-  blackout: { name: 'Ngắt cầu dao', calm: -10, stamina: -6 },
-  strike: { name: 'Đình công toàn công ty', calm: -40, stamina: -30 }
+/** Tên + cá + khoảng cân của từng hành động (khớp defaults.ts của server) — chỉ dùng cho xem trước. */
+const PREVIEW_INFO: Record<string, { name: string; emoji: string; fish: string; min: number; max: number }> = {
+  pull_carp: { name: 'Kéo cá chép to', emoji: '🐟', fish: 'Cá chép to', min: 3, max: 6 },
+  pull_grass_carp: { name: 'Kéo cá trắm cỏ', emoji: '🐠', fish: 'Cá trắm cỏ', min: 6, max: 12 },
+  pull_catfish: { name: 'Kéo cá trê khổng lồ', emoji: '🐡', fish: 'Cá trê khổng lồ', min: 10, max: 20 },
+  pull_snakehead: { name: 'Kéo cá lóc bông', emoji: '🐟', fish: 'Cá lóc bông', min: 15, max: 25 },
+  pull_giant_catfish: { name: 'Kéo cá lăng khủng', emoji: '🦈', fish: 'Cá lăng khủng', min: 25, max: 50 },
+  pull_arowana: { name: 'Kéo cá rồng vàng', emoji: '🐉', fish: 'Cá rồng vàng', min: 40, max: 70 },
+  pull_stingray: { name: 'Kéo cá đuối nước ngọt', emoji: '🦈', fish: 'Cá đuối khổng lồ', min: 60, max: 120 },
+  pull_legend: { name: 'Kéo Cá Thần huyền thoại', emoji: '👑', fish: 'Cá Thần huyền thoại', min: 150, max: 300 },
+  pull_koi: { name: 'Kéo cá Koi', emoji: '🎏', fish: 'Cá Koi đỏ trắng', min: 2, max: 5 },
+  big_fish_event: { name: 'Cá to xuất hiện!', emoji: '🐋', fish: 'Cá to bí ẩn', min: 8, max: 30 },
+  grand_haul: { name: 'Cả hồ kéo Cá Thần', emoji: '👑', fish: 'Cá Thần', min: 200, max: 400 }
 };
+
+/** Cá thường (khớp fishing.loot mặc định): emoji, tên, trọng số, kg. */
+const PREVIEW_LOOT: [string, string, number, number, number][] = [
+  ['🐟', 'Cá rô', 30, 0.1, 0.5],
+  ['🐠', 'Cá chép', 22, 0.5, 3],
+  ['🐡', 'Cá trắm', 12, 2, 8],
+  ['🦐', 'Tôm càng', 12, 0.05, 0.2],
+  ['🐢', 'Rùa', 4, 1, 5],
+  ['🥾', 'Chiếc ủng rách', 10, 0, 0],
+  ['🧦', 'Chiếc tất thối', 6, 0, 0],
+  ['🦈', 'Cá lăng khủng', 3, 10, 30],
+  ['👑', 'Cá Koi vàng', 1, 3, 6]
+];
+const kgIn = (a: number, b: number) => Math.round((a + Math.random() * (b - a)) * 10) / 10;
 
 function preview(which: string): void {
   hud.connection(true);
   hud.running(true);
-  const people = Math.max(0, Math.min(100, Number(params.get('people') ?? 24) || 0));
+  const people = Math.max(0, Math.min(50, Number(params.get('people') ?? 20) || 0));
   const roster: RosterMember[] = Array.from({ length: people }, (_, i) => ({
     platformId: `preview:${i}`,
-    displayName: `Nhân viên ${i + 1}`,
+    displayName: `Cần thủ ${i + 1}`,
     follower: i % 3 !== 0,
-    points: 0
+    points: 0,
+    seat: i < 5 ? 'front' : i % 2 ? 'left' : 'right',
+    kg: 0,
+    fishingMs: 0,
+    diamonds: 0
   }));
-  scene.classroom.sync(roster);
+  scene.anglers.sync(roster);
+
   const ids = which === 'all' ? Object.keys(ANIMATIONS) : [which];
   let i = 0;
-  // Mô phỏng thanh Sếp giống server (defaults.ts): trừ khi bị trêu, hồi dần theo thời gian.
-  const boss: BossState = { calm: 100, stamina: 100, mood: 'normal', exhaustedUntil: 0, lastActionId: null, lastActorName: null };
-  const moodOf = (): BossState['mood'] =>
-    boss.exhaustedUntil > Date.now() ? 'helpless' : boss.calm >= 80 ? 'normal' : boss.calm >= 60 ? 'annoyed' : boss.calm >= 35 ? 'angry' : boss.calm >= 15 ? 'panic' : 'helpless';
-  const pushBoss = () => {
-    boss.mood = moodOf();
-    hud.boss(boss);
-    director.setMood(boss.mood);
+  const pushBoards = () => {
+    const entry = (m: RosterMember, k: number): LeaderboardEntry => ({
+      rank: k + 1,
+      platformId: m.platformId,
+      displayName: m.displayName,
+      participations: 1,
+      points: m.points,
+      diamonds: m.diamonds,
+      kg: m.kg,
+      title: ''
+    });
+    const gifts = [...roster].filter((m) => m.diamonds > 0).sort((a, b) => b.diamonds - a.diamonds).map(entry);
+    const kg = [...roster].filter((m) => m.kg > 0).sort((a, b) => b.kg - a.kg).map(entry);
+    hud.leaderboard(gifts, roster.length, kg);
   };
-  let last = Date.now();
-  setInterval(() => {
-    const now = Date.now();
-    const dt = (now - last) / 1000;
-    last = now;
-    if (boss.exhaustedUntil <= now) {
-      boss.calm = Math.min(100, boss.calm + 0.15 * dt);
-      boss.stamina = Math.min(100, boss.stamina + 0.1 * dt);
-    }
-    pushBoss();
-  }, 500);
-  const gifted = new Map<string, number>();
-  hud.leaderboard([], 0);
+  pushBoards();
+
   const loop = () => {
     const actionId = ids[i % ids.length]!;
-    const actor = roster.length ? roster[(i * 7) % roster.length]!.displayName : 'Xem trước';
+    const actorM = roster.length ? roster[(i * 7) % roster.length]! : undefined;
     const info = PREVIEW_INFO[actionId];
-    if (info) {
-      boss.calm = Math.max(0, Math.min(100, boss.calm + info.calm));
-      const before = boss.stamina;
-      boss.stamina = Math.max(0, Math.min(100, boss.stamina + info.stamina));
-      if (boss.stamina <= 0 && before > 0) boss.exhaustedUntil = Date.now() + 12_000;
-      pushBoss();
-    }
+    const kg = info ? kgIn(info.min, info.max) : 5;
     const run: RunningAction = {
       runId: `preview-${i}`,
       actionId,
       actionName: info?.name ?? actionId,
       lanes: [],
-      actor: { displayName: actor },
-      source: 'demo',
+      actor: actionId === 'grand_haul' ? null : { displayName: actorM?.displayName ?? 'Xem trước' },
+      source: actionId === 'grand_haul' ? 'collective' : 'demo',
       startedAt: Date.now(),
-      durationMs: PREVIEW_DURATIONS[actionId] ?? 4000
+      durationMs: PREVIEW_DURATIONS[actionId] ?? 6000,
+      fish: { emoji: info?.emoji ?? '🐟', name: info?.fish ?? 'Cá to', kg }
     };
     director.syncClock(Date.now());
     handle({ type: 'action.started', data: run });
-    // bảng TOP PHÁ SẾP giả lập: mỗi lượt trêu = một món quà
-    gifted.set(actor, (gifted.get(actor) ?? 0) + [1, 5, 10, 30, 99, 199, 299, 499][i % 8]!);
-    hud.leaderboard(
-      [...gifted.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([name, diamonds], k) => ({ rank: k + 1, platformId: name, displayName: name, participations: 1, points: 0, title: '', diamonds })),
-      gifted.size
-    );
+    setTimeout(() => handle({ type: 'action.ended', data: { runId: run.runId, actionId } }), run.durationMs);
+    if (actorM && actionId !== 'grand_haul') {
+      actorM.kg = Math.round((actorM.kg + kg) * 10) / 10;
+      actorM.diamonds += [1, 5, 10, 30, 99, 199, 299, 499][i % 8]!;
+    }
+    pushBoards();
     i += 1;
-    setTimeout(loop, run.durationMs + 600);
+    setTimeout(loop, run.durationMs + 1500);
   };
   loop();
-  // Thỉnh thoảng có người "làm việc" tại chỗ.
+
+  // Câu tự động: mỗi 5 giây một người (theo thứ tự vào hồ) lên một con cá.
+  const totalW = PREVIEW_LOOT.reduce((a, l) => a + l[2], 0);
+  let turn = 0;
+  if (roster.length)
+    setInterval(() => {
+      const m = roster[turn++ % roster.length]!;
+      let r = Math.random() * totalW;
+      const loot = PREVIEW_LOOT.find((l) => (r -= l[2]) < 0) ?? PREVIEW_LOOT[0]!;
+      const ev: CatchEvent = { platformId: m.platformId, displayName: m.displayName, emoji: loot[0], name: loot[1], kg: kgIn(loot[3], loot[4]), at: Date.now() };
+      m.kg = Math.round((m.kg + ev.kg) * 10) / 10;
+      handle({ type: 'catches', data: [ev] });
+      pushBoards();
+    }, 5000);
+
+  // Thỉnh thoảng có người bình luận "việc" vui tại chỗ.
   const works = [
-    ['⌨️', 'Đang chạy deadline...'],
-    ['📄', 'Báo cáo đây Sếp!'],
-    ['☕', 'Nạp cà phê đã...'],
-    ['🙏', 'Sếp ơi em xin nghỉ!']
+    ['🪱', 'Mồi giun xịn đây!'],
+    ['🍵', 'Làm cốc trà đá đã...'],
+    ['📸', 'Cá to chưa anh em!'],
+    ['🎵', 'Ơi à ơi... cá ơi lên đi!'],
+    ['😴', 'Zzz... cá cắn câu thì gọi nhé']
   ] as const;
   if (roster.length)
     setInterval(() => {
       const m = roster[Math.floor(Math.random() * roster.length)]!;
       const [emoji, text] = works[Math.floor(Math.random() * works.length)]!;
-      scene.classroom.emote({ platformId: m.platformId, displayName: m.displayName, taskId: 'preview', emoji, text, at: Date.now() });
-    }, 1500);
+      const ev: WorkEvent = { platformId: m.platformId, displayName: m.displayName, taskId: 'preview', emoji, text, at: Date.now(), points: 1 };
+      handle({ type: 'work', data: ev });
+    }, 7000);
+
+  // Cá to định kỳ: 30 giây một lần, bóng cá lượn 15 giây trước đó.
+  const scheduleBigFish = () => handle({ type: 'bigfish.next', data: { at: Date.now() + 30_000, shadowMs: 15_000 } });
+  scheduleBigFish();
+  setInterval(scheduleBigFish, 30_000);
 }
 
 const previewId = params.get('preview');

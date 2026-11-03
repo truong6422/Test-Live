@@ -1,15 +1,20 @@
-import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
-import type { RunningAction } from '@sep/shared';
-import { hasClip, type BossClip, type BossPose } from './boss';
-import { BREAKER, DEPARTMENTS, KPI_BOARD, SPOT, TREE, type SceneRefs, type Seat } from './office';
-import { lookFor } from './people';
-import { hash, INK } from './pixel';
+import { Graphics, Sprite, Text, type Container } from 'pixi.js';
+import type { RunningAction } from '@cau/shared';
+import type { SceneRefs, Spot } from './contract';
+import { bigFishTexture } from './assets';
+import { seatedPullPoints } from './angler';
+import { LAKE_SPOTS, SHIRTS } from './lake';
 import { clamp01, easeIn, easeInOut, easeOut, lerp, seg } from './util';
 
 /**
  * Mỗi hoạt ảnh là một timeline xác định theo thời gian: update(ms) vẽ đúng trạng thái tại thời điểm ms.
  * Nhờ vậy overlay mở giữa chừng vẫn vẽ đúng vị trí; finish() luôn đưa cảnh về trạng thái gốc.
- * Server đảm bảo không có hai hoạt ảnh dùng chung lane chạy cùng lúc.
+ * Mọi hành động kéo cá đều dùng lane `king` + `lake` nên chỉ một hoạt ảnh chạy tại một thời điểm
+ * → finish() được phép trả cả cảnh về gốc.
+ *
+ * Hành động = "kéo cá to": cần thủ của người tặng ra mép hồ, cá cắn câu, cần cong vút, dây căng rung,
+ * nước xoáy, bọt tung, rung màn hình, cá phóng khỏi mặt nước xoay vòng, băng rôn tên + cân to giữa màn hình,
+ * pháo hoa + tia sáng, cả hồ cổ vũ. Bậc càng cao (cá càng to) càng dài, càng hoành tráng.
  */
 export interface ActionAnim {
   update(elapsedMs: number): void;
@@ -18,863 +23,844 @@ export interface ActionAnim {
 
 export type AnimFactory = (s: SceneRefs, run: RunningAction) => ActionAnim;
 
-const bubble = (text: string, color = 0xe01b24, size = 44) =>
-  new Text({ text, style: { fontFamily: 'Segoe UI, Arial', fontSize: size, fontWeight: '900', fill: color, stroke: { color: 0xffffff, width: 8 } } });
+const INK = 0x1b1b24;
+const TAU = Math.PI * 2;
 
-/** Di chuyển Sếp giữa hai điểm, có bước đi. */
-function walkBoss(s: SceneRefs, from: number, to: number, t: number): void {
-  s.boss.x = lerp(from, to, easeInOut(t));
-  s.boss.walking = t > 0 && t < 1;
-  s.boss.scale.x = to < from ? -1 : 1;
+function hash(str: string): number {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+  return Math.abs(h);
 }
 
-function pose(s: SceneRefs, p: BossPose | BossClip | null): void {
-  s.boss.setPose(p);
+const label = (text: string, color = 0xe01b24, size = 44, strokeW = 8): Text => {
+  const t = new Text({
+    text,
+    style: {
+      fontFamily: 'Be Vietnam Pro, Segoe UI, Arial',
+      fontSize: size,
+      fontWeight: '900',
+      fill: color,
+      stroke: { color: 0xffffff, width: strokeW },
+      align: 'center',
+      // Dấu tiếng Việt trên chữ in hoa (É, Ô, Ặ...) nhô cao hơn cap height: dòng thưa + padding để không bị cắt.
+      lineHeight: size * 1.4,
+      padding: Math.ceil(size * 0.3)
+    }
+  });
+  t.anchor.set(0.5);
+  t.visible = false;
+  return t;
+};
+
+/** Hiện chữ trong [a,b] với hiệu ứng "bật" lúc xuất hiện. */
+function pop(t: Text, p: number, a: number, b: number, x: number, y: number, rise = 30, scale = 1): void {
+  const on = p >= a && p < b;
+  t.visible = on;
+  if (!on) return;
+  const k = seg(p, a, b);
+  const sc = k < 0.1 ? lerp(0.3, 1.15, k / 0.1) : k < 0.18 ? lerp(1.15, 1, (k - 0.1) / 0.08) : 1;
+  t.scale.set(sc * scale);
+  t.position.set(x, y - rise * k);
+  t.alpha = k > 0.88 ? 1 - (k - 0.88) / 0.12 : 1;
 }
 
-function resetBoss(s: SceneRefs): void {
-  s.boss.position.set(SPOT.bossHome, SPOT.floorY);
-  s.boss.alpha = 1;
-  s.boss.walking = false;
-  s.boss.running = false;
-  s.boss.scale.x = 1;
-  s.boss.leanAngle = 0;
-  s.boss.shakeAmount = 0;
-  s.boss.setExpression(null);
-  s.boss.setPose(null);
-  s.bossDesk.visible = true;
+const short = (name: string, n = 16) => {
+  const c = [...name];
+  return c.length > n ? `${c.slice(0, n - 1).join('')}…` : name;
+};
+
+/** Chữ hiển thị không dùng từ ngữ may rủi (chính sách TikTok). */
+const clean = (name: string) => name.replace(/\s*may mắn/gi, '').trim();
+const fmtKg = (kg: number) => (Math.round(kg * 10) / 10).toLocaleString('vi-VN', { maximumFractionDigits: 1 });
+
+/** Gợn sóng hình elip lan ra. age 0..1. */
+function ripple(g: Graphics, x: number, y: number, age: number, maxR: number, color = 0xffffff, width = 5): void {
+  if (age <= 0 || age >= 1) return;
+  const r = 10 + maxR * easeOut(age);
+  g.ellipse(x, y, r, r * 0.32).stroke({ width, color, alpha: 0.9 * (1 - age) });
 }
 
-/** Ghế của người ra tay; không có thì một ghế bất kỳ đang có người. */
-function actorSeat(s: SceneRefs, run: RunningAction): Seat | undefined {
-  const own = s.classroom.seatOf(run.actor?.displayName);
-  if (own) return own;
-  const occ = s.classroom.occupied();
-  return occ.length ? occ[hash(run.runId) % occ.length] : undefined;
+/** Tia nước bắn (giọt vuông kiểu pixel). age 0..1. */
+function splash(g: Graphics, x: number, y: number, age: number, seed: number, n = 10, spread = 140, up = 260): void {
+  if (age <= 0 || age >= 1) return;
+  for (let i = 0; i < n; i++) {
+    const r = hash(`${seed}:${i}`);
+    const vx = ((r % 200) / 100 - 1) * spread;
+    const vy = -up - ((r >> 5) % 200) * (up / 260);
+    const t = age * 0.9;
+    const px = x + vx * t;
+    const py = y + vy * t + 900 * t * t;
+    const sz = 8 + ((r >> 9) % 3) * 4;
+    g.rect(px - sz / 2, py - sz / 2, sz, sz).fill({ color: i % 3 ? 0xbfe8ff : 0xffffff, alpha: 1 - age * 0.6 });
+  }
+}
+
+/** Ngôi sao lấp lánh 4 cánh. */
+function sparkle(g: Graphics, x: number, y: number, size: number, alpha: number, c = 0xfff3a0): void {
+  const b = Math.max(3, size / 4);
+  g.rect(x - b / 2, y - size, b, size * 2).fill({ color: c, alpha }).rect(x - size, y - b / 2, size * 2, b).fill({ color: c, alpha });
+  g.rect(x - b, y - b, b * 2, b * 2).fill({ color: 0xffffff, alpha });
+}
+
+/** Chiếc tim pixel. */
+function heart(g: Graphics, x: number, y: number, alpha: number, c = 0xff6b9a): void {
+  g.rect(x, y, 8, 8).fill({ color: c, alpha }).rect(x + 12, y, 8, 8).fill({ color: c, alpha });
+  g.rect(x - 4, y + 6, 28, 8).fill({ color: c, alpha }).rect(x + 4, y + 14, 12, 8).fill({ color: c, alpha });
+}
+
+/** Thêm các đối tượng vào một lớp; trả về hàm huỷ tất cả. */
+function attach(layer: Container, ...items: Container[]): () => void {
+  layer.addChild(...items);
+  return () => items.forEach((i) => i.destroy());
+}
+
+/** Gọi reactAll chỉ khi đổi trạng thái (không gọi mỗi khung). */
+function reactor(s: SceneRefs) {
+  let cur: 'cheer' | 'wet' | 'scared' | 'pull' | null = null;
+  return (k: typeof cur) => {
+    if (k === cur) return;
+    cur = k;
+    s.anglers.reactAll(k);
+  };
+}
+
+/** Bắn chớp đúng một lần khi đi qua mỗi mốc (mở giữa chừng không bắn dồn tia cũ). */
+function flasher(s: SceneRefs, times: number[], dur: number) {
+  let fired = 0;
+  return (p: number) => {
+    while (fired < times.length && p >= times[fired]!) {
+      if ((p - times[fired]!) * dur < 300) s.weather.flash();
+      fired++;
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------
+// Cá vẽ thủ tục theo loài (một lần, rồi chỉ dời / xoay / co giãn).
+// Gốc (0,0) = tâm thân, đầu quay sang phải, dài L px.
+// ---------------------------------------------------------------------------
 
-/**
- * "Chuyến đi" của nhân vật người xem: rời ghế → đi tới đích → làm việc → quay về ghế.
- * Ghế để trống trong lúc nhân vật đi vắng. Người chưa có ghế thì đi vào từ mép dưới.
- */
-function makeTrip(s: SceneRefs, run: RunningAction) {
-  const name = run.actor?.displayName ?? 'Nhân viên ẩn danh';
-  const seat = s.classroom.seatOf(name);
+type FishKind = 'koi' | 'carp' | 'grass' | 'catfish' | 'snakehead' | 'giant' | 'arowana' | 'stingray' | 'mystery';
+
+const FISH_PAL: Record<FishKind, { body: number; belly: number; dark: number; fin: number }> = {
+  koi: { body: 0xf6f5f4, belly: 0xffffff, dark: 0xe66100, fin: 0xffbe6f },
+  carp: { body: 0xc8892b, belly: 0xf9e3a3, dark: 0x8f5b00, fin: 0xe5a50a },
+  grass: { body: 0x8a9a5b, belly: 0xe9edc9, dark: 0x5b6b33, fin: 0xa3b18a },
+  catfish: { body: 0x6b5a4a, belly: 0xd8c3a5, dark: 0x463a2f, fin: 0x8c7660 },
+  snakehead: { body: 0x56634a, belly: 0xc9d1b3, dark: 0x2f3a27, fin: 0x7b8a63 },
+  giant: { body: 0x5e6c7a, belly: 0xdfe6ec, dark: 0x3a4651, fin: 0x8696a5 },
+  arowana: { body: 0xf5c211, belly: 0xfff3a0, dark: 0xc88800, fin: 0xff7800 },
+  stingray: { body: 0x7a6a5a, belly: 0xf2e6d8, dark: 0x4a3e33, fin: 0x9c8a77 },
+  mystery: { body: 0x3d5a80, belly: 0x98c1d9, dark: 0x293241, fin: 0x5c7ea6 }
+};
+
+function drawFish(g: Graphics, kind: FishKind, L: number): Graphics {
+  const P = FISH_PAL[kind];
+  if (kind === 'stingray') {
+    const W = L * 0.5;
+    // đuôi dài mảnh
+    g.moveTo(-L * 0.3, 0).lineTo(-L * 0.95, L * 0.06).stroke({ width: 10, color: INK }).moveTo(-L * 0.3, 0).lineTo(-L * 0.95, L * 0.06).stroke({ width: 5, color: P.dark });
+    const pts = [L * 0.42, 0, 0, -W, -L * 0.34, 0, 0, W];
+    g.poly(pts.map((v, i) => v * 1.06 + (i % 2 ? 0 : 4))).fill(INK);
+    g.poly(pts).fill(P.body);
+    g.poly([L * 0.3, 0, 0, -W * 0.6, -L * 0.2, 0, 0, W * 0.6]).fill(P.dark);
+    for (let i = 0; i < 9; i++) {
+      const r = hash(`ray${i}`);
+      g.rect(((r % 100) / 100 - 0.5) * L * 0.4, (((r >> 7) % 100) / 100 - 0.5) * W, 10, 10).fill(P.belly);
+    }
+    g.rect(L * 0.18, -W * 0.18, 12, 12).fill(0xffffff).rect(L * 0.21, -W * 0.16, 6, 6).fill(INK);
+    g.rect(L * 0.18, W * 0.08, 12, 12).fill(0xffffff).rect(L * 0.21, W * 0.1, 6, 6).fill(INK);
+    return g;
+  }
+  const slim = kind === 'arowana' || kind === 'snakehead' ? 0.28 : kind === 'catfish' || kind === 'giant' ? 0.32 : 0.4;
+  const H = L * slim;
+  const hl = L / 2;
+  // đuôi
+  const tail = [-hl + 8, 0, -hl - L * 0.24, -H * 0.62, -hl - L * 0.15, 0, -hl - L * 0.24, H * 0.62];
+  g.poly(tail.map((v, i) => (i % 2 ? v * 1.15 : v - 5))).fill(INK);
+  g.poly(tail).fill(P.fin);
+  // vây lưng
+  const dorsal = kind === 'arowana' || kind === 'snakehead' ? [L * 0.05, -H * 0.42, -L * 0.42, -H * 0.62, -L * 0.42, -H * 0.2] : [L * 0.12, -H * 0.45, -L * 0.12, -H * 0.85, -L * 0.25, -H * 0.38];
+  g.poly(dorsal.map((v, i) => (i % 2 ? v - 4 : v))).fill(INK);
+  g.poly(dorsal).fill(P.fin);
+  // thân
+  g.ellipse(0, 0, hl + 6, H / 2 + 6).fill(INK);
+  g.ellipse(0, 0, hl, H / 2).fill(P.body);
+  g.ellipse(L * 0.04, H * 0.2, L * 0.38, H * 0.22).fill(P.belly);
+  // hoa văn
+  if (kind === 'koi') {
+    g.ellipse(-L * 0.1, -H * 0.1, L * 0.16, H * 0.24).fill(P.dark).ellipse(L * 0.22, -H * 0.18, L * 0.1, H * 0.16).fill(0xe01b24);
+  } else if (kind === 'snakehead') {
+    for (let i = 0; i < 5; i++) g.ellipse(-L * 0.32 + i * L * 0.14, -H * 0.05 + (i % 2) * H * 0.12, L * 0.05, H * 0.13).fill(P.dark);
+  } else if (kind === 'arowana' || kind === 'carp' || kind === 'grass' || kind === 'mystery') {
+    const step = Math.max(14, L / 12);
+    for (let x = -hl + step; x < hl * 0.6; x += step)
+      for (let y = -H * 0.32; y < H * 0.1; y += step * 0.8) g.rect(x + ((y / step) % 2) * 4, y, step * 0.5, 4).fill({ color: P.dark, alpha: 0.75 });
+    if (kind === 'arowana') g.ellipse(-L * 0.05, -H * 0.12, L * 0.3, H * 0.1).fill({ color: 0xffffff, alpha: 0.45 });
+  } else {
+    g.rect(-hl * 0.8, -H * 0.12, L * 0.7, 5).fill({ color: P.dark, alpha: 0.6 });
+  }
+  // vây ngực
+  g.poly([L * 0.12, H * 0.12, -L * 0.04, H * 0.5, L * 0.04, H * 0.14]).fill(P.fin);
+  // mang + mắt
+  g.rect(L * 0.24, -H * 0.3, 5, H * 0.55).fill({ color: P.dark, alpha: 0.8 });
+  const e = Math.max(10, L * 0.06);
+  g.rect(L * 0.33, -H * 0.2, e, e).fill(0xffffff).rect(L * 0.33 + e * 0.45, -H * 0.2 + e * 0.2, e * 0.5, e * 0.6).fill(INK);
+  // râu (cá trê / cá lăng)
+  if (kind === 'catfish' || kind === 'giant') {
+    for (const [dy, dx2, dy2] of [
+      [0.02, 0.62, -0.25],
+      [0.1, 0.66, 0.35],
+      [0.12, 0.55, 0.5]
+    ] as const) {
+      g.moveTo(hl - 4, H * dy).quadraticCurveTo(hl + L * 0.15, H * dy, hl + L * (dx2 - 0.4), H * dy2 + H * 0.4).stroke({ width: 5, color: INK });
+    }
+  }
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// Bậc cá: độ hoành tráng tăng dần theo lvl (0..8).
+// ---------------------------------------------------------------------------
+
+interface Tier {
+  lvl: number;
+  kind: FishKind | 'king';
+  len: number;
+  fallback: { emoji: string; name: string; kg: number };
+  /** Cả hồ cùng kéo (không có người đi riêng). */
+  crowd?: boolean;
+  /** Mở đầu bằng thông báo "CÁ TO XUẤT HIỆN!". */
+  event?: boolean;
+}
+
+const TIERS: Record<string, Tier> = {
+  pull_koi: { lvl: 0, kind: 'koi', len: 150, fallback: { emoji: '🎏', name: 'Cá Koi', kg: 3.5 } },
+  pull_carp: { lvl: 1, kind: 'carp', len: 170, fallback: { emoji: '🐟', name: 'Cá chép to', kg: 4.5 } },
+  pull_grass_carp: { lvl: 2, kind: 'grass', len: 200, fallback: { emoji: '🐠', name: 'Cá trắm cỏ', kg: 9 } },
+  pull_catfish: { lvl: 3, kind: 'catfish', len: 230, fallback: { emoji: '🐡', name: 'Cá trê khổng lồ', kg: 15 } },
+  pull_snakehead: { lvl: 4, kind: 'snakehead', len: 250, fallback: { emoji: '🐟', name: 'Cá lóc bông', kg: 20 } },
+  big_fish_event: { lvl: 4, kind: 'mystery', len: 250, fallback: { emoji: '🐋', name: 'Cá to bí ẩn', kg: 18 }, event: true },
+  pull_giant_catfish: { lvl: 5, kind: 'giant', len: 290, fallback: { emoji: '🦈', name: 'Cá lăng khủng', kg: 38 } },
+  pull_arowana: { lvl: 6, kind: 'arowana', len: 320, fallback: { emoji: '🐉', name: 'Cá rồng vàng', kg: 55 } },
+  pull_stingray: { lvl: 7, kind: 'stingray', len: 330, fallback: { emoji: '🦈', name: 'Cá đuối khổng lồ', kg: 90 } },
+  pull_legend: { lvl: 8, kind: 'king', len: 0, fallback: { emoji: '👑', name: 'Cá Thần huyền thoại', kg: 220 } },
+  grand_haul: { lvl: 8, kind: 'king', len: 0, fallback: { emoji: '👑', name: 'Cá Thần', kg: 300 }, crowd: true }
+};
+
+/** Hành động lạ (cấu hình thêm): đoán bậc theo cân nặng. */
+function tierFor(run: RunningAction): Tier {
+  const t = TIERS[run.actionId];
+  if (t) return t;
+  const kg = run.fish?.kg ?? 10;
+  const order: [number, FishKind, number][] = [
+    [5, 'carp', 170],
+    [12, 'grass', 200],
+    [20, 'catfish', 230],
+    [30, 'snakehead', 250],
+    [55, 'giant', 290],
+    [90, 'arowana', 320],
+    [Infinity, 'stingray', 330]
+  ];
+  const i = Math.max(0, order.findIndex(([m]) => kg < m));
+  const [, kind, len] = order[i]!;
+  return { lvl: i + 1, kind, len, fallback: { emoji: '🐟', name: run.actionName, kg } };
+}
+
+const MYSTERY: FishKind[] = ['carp', 'grass', 'catfish', 'snakehead', 'giant'];
+
+/** Loài cá vẽ tay → id hành động có ảnh sprite tương ứng (assets.ts). */
+const KIND_ACTION: Partial<Record<FishKind, string>> = {
+  koi: 'pull_koi',
+  carp: 'pull_carp',
+  grass: 'pull_grass_carp',
+  catfish: 'pull_catfish',
+  snakehead: 'pull_snakehead',
+  giant: 'pull_giant_catfish',
+  arowana: 'pull_arowana',
+  stingray: 'pull_stingray'
+};
+
+// ---------------------------------------------------------------------------
+// Trạng thái gốc của cảnh — finish() luôn trả về đúng trạng thái này.
+// ---------------------------------------------------------------------------
+
+interface Base {
+  rise: number;
+  bellyUp: boolean;
+  kAlpha: number;
+  kScaleX: number;
+  kScaleY: number;
+  uKingX: number;
+  uKingY: number;
+}
+
+function capture(s: SceneRefs): Base {
+  return {
+    rise: s.king.rise,
+    bellyUp: s.king.bellyUp,
+    kAlpha: s.king.alpha,
+    kScaleX: s.king.scale.x,
+    kScaleY: s.king.scale.y,
+    uKingX: s.underwater.king.x,
+    uKingY: s.underwater.king.y
+  };
+}
+
+function restore(s: SceneRefs, b: Base): void {
+  const k = s.king;
+  k.position.set(LAKE_SPOTS.kingHome.x, LAKE_SPOTS.kingHome.y);
+  k.scale.set(b.kScaleX, b.kScaleY);
+  k.rise = b.rise;
+  k.thrash = 0;
+  k.spin = 0;
+  k.whisker = 1;
+  k.bellyUp = b.bellyUp;
+  k.alpha = b.kAlpha;
+  k.setExpression(null);
+  s.setShake(0);
+  s.weather.setStorm(0);
+  s.weather.setRain(false);
+  s.floodgate.setOpen(0);
+  s.floodgate.setFlood(0);
+  const u = s.underwater;
+  u.root.visible = false;
+  u.king.position.set(b.uKingX, b.uKingY);
+  u.king.thrash = 0;
+  u.king.spin = 0;
+  u.king.setExpression(null);
+  s.boat.rock = 0;
+  s.fade.visible = false;
+  s.fade.alpha = 0;
+  s.banner.visible = false;
+  s.anglers.reactAll(null);
+}
+
+function showBanner(s: SceneRefs, on: boolean, text: string): void {
+  s.banner.visible = on;
+  if (on && s.bannerText.text !== text) s.bannerText.text = text;
+}
+
+// ---------------------------------------------------------------------------
+// Cần thủ người tặng kéo cá TẠI CHỖ: đứng dậy ngay chỗ ngồi của mình (ẩn nhân vật ngồi, hiện người đứng cùng cỡ).
+// Người chưa có chỗ ngồi thì một người đi vào từ mép dưới, đứng ở mép nước bờ gần.
+// ---------------------------------------------------------------------------
+
+function makeTrip(s: SceneRefs, run: RunningAction, spot: Spot | undefined, standX: number, standY: number) {
+  const name = run.actor?.displayName ?? 'Cần thủ ẩn danh';
+  const inPlace = !!spot?.member;
+  const shirt = spot?.shirt ?? SHIRTS[hash(name) % Math.max(1, SHIRTS.length)] ?? 0x3584e4;
   const w = s.spawnWalker();
-  const shirt = DEPARTMENTS[seat?.dept ?? hash(name) % DEPARTMENTS.length]!.shirt;
-  w.setPerson(name, { ...lookFor(seat?.member?.platformId ?? name, shirt), tie: seat?.member?.follower ?? false });
-  const home = seat ? { x: seat.x, y: seat.y + 38 * seat.s } : { x: 540, y: 1700 };
+  w.setPerson(name, { shirt, official: spot?.member?.follower ?? false, seed: spot?.member?.platformId ?? name });
+  w.visible = false;
+  w.pose = 'idle';
+  w.holding = 'none';
+  /** Người đứng cao hơn người ngồi chút (người ngồi ≈ 68·s px, người đứng mặc định ≈ 130 px). */
+  const sc = inPlace ? 0.72 * spot!.s : 1;
+  w.scale.set(sc);
+  /** Hướng ra mặt nước: bờ trái nhìn phải, bờ phải nhìn trái. */
+  const dir: 1 | -1 = spot?.side === 'right' ? -1 : 1;
+  const home = inPlace ? { x: spot!.x, y: spot!.y } : { x: standX, y: 1990 };
+  /** Có ảnh cần thủ: không đứng dậy — người ngồi (ảnh) kéo luôn tại ghế, chỉ ẩn người đứng vẽ tay. */
+  const seated = inPlace ? seatedPullPoints(spot!) : null;
+  let away = false;
+  const setAway = (v: boolean) => {
+    if (!inPlace || seated || v === away) return;
+    away = v;
+    s.anglers.setAway(spot!, v);
+  };
   return {
     w,
-    /** Đi trong [a,b], đứng ở đích tới c, về ghế trong [c,d] (theo tiến trình p 0..1). */
-    move(p: number, a: number, b: number, c: number, d: number, tx: number, ty: number) {
+    name,
+    inPlace,
+    sc,
+    dir,
+    /**
+     * Tại chỗ: đứng ở chỗ ngồi trong [a,d). Không có chỗ: đi vào trong [a,b], đứng ở mép nước tới c, ra về trong [c,d].
+     * Trả true khi đang đứng ở vị trí kéo.
+     */
+    move(p: number, a: number, b: number, c: number, d: number): boolean {
       const out = p >= a && p < d;
-      w.visible = out;
-      if (seat?.member) seat.person.visible = !out;
-      if (!out) return;
+      w.visible = out && !seated;
+      setAway(out);
+      if (!out) return false;
+      if (inPlace) {
+        w.position.set(home.x, home.y);
+        w.pose = 'idle';
+        w.facing = dir;
+        return p < c;
+      }
       let k: number;
       if (p < b) {
         k = easeInOut(seg(p, a, b));
-        w.walking = true;
-        w.face(tx >= home.x ? 1 : -1);
+        w.pose = 'walk';
+        w.facing = standX >= home.x ? 1 : -1;
       } else if (p < c) {
         k = 1;
-        w.walking = false;
+        w.pose = 'idle';
       } else {
         k = 1 - easeInOut(seg(p, c, d));
-        w.walking = true;
-        w.face(home.x >= tx ? 1 : -1);
+        w.pose = 'walk';
+        w.facing = home.x >= standX ? 1 : -1;
       }
-      w.x = lerp(home.x, tx, k);
-      w.y = lerp(home.y, ty, k);
+      w.x = lerp(home.x, standX, k);
+      w.y = lerp(home.y, standY, k);
+      return p >= b && p < c;
+    },
+    hand() {
+      if (seated) return seated.hand;
+      return { x: w.x + w.facing * 38 * sc, y: w.y - 62 * sc };
+    },
+    headY() {
+      if (seated) return seated.headY;
+      return w.y - 140 * sc;
     },
     done() {
-      if (seat?.member) seat.person.visible = true;
+      setAway(false);
       s.removeWalker(w);
     }
   };
 }
 
 // ---------------------------------------------------------------------------
-// 1. Ném giấy — giấy bay từ đúng ghế người ném; Sếp né hoặc trúng rồi chỉ tay về phía đó.
+// Bộ máy kéo cá to dùng chung cho mọi bậc.
 // ---------------------------------------------------------------------------
-const throwPaper: AnimFactory = (s, run) => {
-  const seat = actorSeat(s, run);
-  const fromX = seat?.x ?? 540;
-  const fromY = seat ? seat.y - 62 * seat.s : 1200;
-  const dodge = hash(run.runId) % 3 === 0;
-  s.classroom.cheer(run.actor?.displayName, run.durationMs * 0.5);
-  const paper = new Graphics();
-  // cục giấy vo tròn (to, có nếp nhăn) — không phải viên phấn
-  paper
-    .rect(-12, -22, 24, 44).fill(INK).rect(-22, -12, 44, 24).fill(INK).rect(-18, -18, 36, 36).fill(INK)
-    .rect(-10, -19, 20, 38).fill(0xf6f5f4).rect(-19, -10, 38, 20).fill(0xf6f5f4).rect(-15, -15, 30, 30).fill(0xf6f5f4)
-    .rect(-12, -6, 10, 3).fill(0x9a9996).rect(2, -12, 3, 10).fill(0x9a9996).rect(-4, 4, 14, 3).fill(0x9a9996)
-    .rect(6, 8, 8, 3).fill(0xc0bfbc).rect(-14, 6, 3, 8).fill(0xc0bfbc);
-  const fx = bubble(dodge ? 'NÉ!' : 'BỐP!');
-  fx.anchor.set(0.5);
-  fx.visible = false;
-  s.fx.addChild(paper, fx);
+
+const KH = LAKE_SPOTS.kingHome;
+
+function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
+  const base = capture(s);
   const dur = run.durationMs;
+  const lvl = tier.lvl;
+  const isKing = tier.kind === 'king';
+  const crowd = !!tier.crowd;
+  const seed = hash(run.runId);
+  const fish = run.fish ?? tier.fallback;
+  const fishName = clean(fish.name);
+  const who = run.actor ? short(run.actor.displayName, 18) : 'Cả hồ';
+  const headline = crowd
+    ? `CẢ HỒ kéo được\n${fish.emoji} ${fishName}\n${fmtKg(fish.kg)}kg!`
+    : `${who} kéo được\n${fish.emoji} ${fishName}\n${fmtKg(fish.kg)}kg!`;
+
+  // ---- mốc thời gian (tỉ lệ) ----
+  const legend = isKing && !crowd;
+  const BITE = 0.1;
+  const FIGHT = legend ? 0.3 : 0.18;
+  const BURST = 0.6;
+  const APEX = 0.7;
+  const SHOW_END = 0.9;
+
+  // ---- vị trí ----
+  // Người tặng đang ngồi câu → kéo ngay tại chỗ: lưỡi câu ở gần phao của họ, cá phóng lên cạnh họ rồi rơi về chỗ họ.
+  const spot = !crowd && run.actor ? s.anglers.spotOf(run.actor.displayName) : undefined;
+  const inPlace = !!spot?.member;
+  const side = spot ? (spot.x < 540 ? -1 : 1) : seed % 2 ? 1 : -1;
+  const standX = 540 + side * 110;
+  const standY = LAKE_SPOTS.shoreY + 14;
+  const clampWaterY = (y: number) => Math.max(LAKE_SPOTS.waterTopY + 50, Math.min(LAKE_SPOTS.waterBottomY - 40, y));
+  const F =
+    crowd || (isKing && !inPlace)
+      ? { x: KH.x, y: KH.y }
+      : inPlace
+        ? spot!.side === 'front'
+          ? { x: spot!.rodTip.x, y: clampWaterY(spot!.rodTip.y + 80) }
+          : { x: spot!.rodTip.x + (spot!.side === 'right' ? -60 : 60), y: clampWaterY(spot!.rodTip.y + 50) }
+        : { x: 540 + side * 40, y: lerp(LAKE_SPOTS.shoreY - 30, KH.y, 0.5) };
+
+  const trip = crowd ? null : makeTrip(s, run, spot, standX, standY);
+  const spots = crowd ? s.anglers.occupied().slice(0, 80) : [];
+
+  // ---- đồ hoạ ----
+  const water = new Graphics(); // xoáy, gợn, bóng cá (dưới cần thủ)
+  const rays = new Graphics();
+  const rayLen = 380 + lvl * 50;
+  const nRays = 10 + lvl * 2;
+  for (let i = 0; i < nRays; i++) {
+    const a0 = (i / nRays) * TAU;
+    const a1 = a0 + (TAU / nRays) * 0.5;
+    rays.poly([0, 0, Math.cos(a0) * rayLen, Math.sin(a0) * rayLen, Math.cos(a1) * rayLen, Math.sin(a1) * rayLen]).fill({ color: i % 2 ? 0xffffff : 0xffd166, alpha: 0.32 });
+  }
+  rays.circle(0, 0, 120 + lvl * 10).fill({ color: 0xfff3a0, alpha: 0.35 });
+  rays.visible = false;
+  const rodG = new Graphics(); // cần + dây
+  const spray = new Graphics(); // bọt nước bắn trên mặt nước
+  const fireworks = new Graphics();
+  const kind: FishKind = tier.kind === 'king' ? 'mystery' : tier.kind === 'mystery' ? MYSTERY[seed % MYSTERY.length]! : tier.kind;
+  // Ảnh sprite (nếu đã tải) ưu tiên hơn cá vẽ thủ tục; Cá Thần không có ảnh thì dùng chính s.king.
+  const texId = isKing ? 'pull_legend' : tier.event || !TIERS[run.actionId] ? KIND_ACTION[kind] : run.actionId;
+  const tex = texId ? bigFishTexture(texId) : null;
+  const dispLen = tier.len || 440;
+  let fishG: Container | null = null;
+  let baseScale = 1;
+  if (tex) {
+    const sp = new Sprite(tex);
+    sp.anchor.set(0.5);
+    baseScale = dispLen / Math.max(1, tex.width);
+    fishG = sp;
+  } else if (!isKing) fishG = drawFish(new Graphics(), kind, tier.len);
+  if (fishG) fishG.visible = false;
+  /** Cá Thần có ảnh sprite: s.king vẫn vật lộn dưới nước, tới lúc phóng lên thì đổi sang ảnh. */
+  const kingSprite = isKing && !!fishG;
+  // Đỉnh cú phóng: cả hồ kéo → giữa màn hình; kéo riêng → ngay phía trên chỗ lưỡi câu, cạnh người kéo.
+  const showHalf = ((fishG ? dispLen : 300) * 1.2) / 2;
+  const apex = crowd
+    ? { x: 540, y: Math.max(640, Math.min(820, LAKE_SPOTS.waterTopY + 80)) }
+    : {
+        x: Math.max(showHalf + 30, Math.min(1050 - showHalf, F.x + (inPlace && spot!.side !== 'front' ? (spot!.side === 'right' ? -40 : 40) : 0))),
+        y: Math.max(650, Math.min(1250, F.y - 230 - lvl * 12))
+      };
+  // Băng rôn + tia sáng + pháo hoa luôn ở giữa màn hình, tránh chỗ cá đang khoe.
+  const bannerY = crowd ? Math.min(1180, apex.y + 300 + lvl * 8) : apex.y < 1000 ? 1180 : 820;
+  rays.position.set(540, bannerY);
+  const shadow = new Graphics();
+  const hookText = label(tier.event ? 'CÁ TO XUẤT HIỆN!' : 'DÍNH CÁ TO!', 0xe01b24, 50 + lvl * 3);
+  const pullText = label(crowd ? 'HÒ DÔ TA!' : 'KÉO!!!', 0xff6b35, 56 + lvl * 3);
+  const big = label(headline, 0xffd166, 64 + lvl * 4, 12);
+  big.style.stroke = { color: INK, width: 14 };
+  big.style.dropShadow = { color: 0xb4471c, distance: 6, angle: Math.PI / 2, blur: 0, alpha: 1 };
+  const killWater = attach(s.waterFx, water, shadow);
+  const killFx = attach(s.fx, rays, rodG, spray, ...(fishG ? [fishG] : []), fireworks, hookText, pullText, big);
+
+  // dưới đáy hồ (chỉ Cá Thần huyền thoại): cảnh cắt Cá Thần đớp mồi
+  const uLine = new Graphics();
+  const uText = label('Cá Thần đớp mồi!!', 0xffd166, 46);
+  const killU = legend ? attach(s.underwater.fx, uLine, uText) : () => {};
+
+  const react = reactor(s);
+  const flashTimes = lvl >= 6 ? [FIGHT + 0.08, (FIGHT + BURST) / 2, BURST, BURST + 0.05] : lvl >= 4 ? [BURST] : [];
+  const flash = flasher(s, flashTimes, dur);
+
+  // pháo hoa: số chùm theo bậc, thời điểm + vị trí cố định theo runId
+  const bursts = Array.from({ length: 2 + lvl * 2 }, (_, i) => {
+    const r = hash(`${run.runId}:fw${i}`);
+    return {
+      t: APEX + ((r % 1000) / 1000) * (SHOW_END - APEX - 0.04),
+      x: 140 + ((r >> 3) % 800),
+      y: bannerY - 420 + ((r >> 7) % 480),
+      c: [0xffd166, 0xe01b24, 0x26a269, 0x3584e4, 0xff6b9a, 0xffffff][(r >> 2) % 6]!,
+      n: 18 + lvl * 2
+    };
+  });
+  const turns = 1 + Math.floor(lvl / 2);
+  const shakeMax = Math.min(1, 0.2 + lvl * 0.1);
+
   return {
     update(ms) {
       const p = clamp01(ms / dur);
-      const fly = seg(p, 0.05, 0.4);
-      const tx = SPOT.bossHome + (dodge ? 30 : 0);
-      paper.visible = fly > 0 && (fly < 1 || dodge);
-      paper.x = lerp(fromX, dodge ? tx + 300 * seg(p, 0.4, 0.6) : tx, fly);
-      paper.y = lerp(fromY, SPOT.bossHeadY, fly) - Math.sin(fly * Math.PI) * 220 + (dodge ? 300 * seg(p, 0.4, 0.6) ** 2 : 0);
-      paper.rotation = Math.floor(ms / 80) * 0.6;
-      if (p < 0.38) pose(s, null);
-      else if (p < 0.62) {
-        if (dodge) {
-          pose(s, 'shocked');
-          s.boss.leanAngle = -0.2 * Math.sin(Math.PI * seg(p, 0.38, 0.62));
-          s.boss.setExpression('shock');
-        } else {
-          pose(s, 'rage');
-          s.boss.setExpression('hit');
+      const fightK = seg(p, FIGHT, BURST);
+      const fighting = p >= FIGHT && p < BURST;
+      const k = s.king;
+
+      // ---------- băng rôn đầu ----------
+      const top = tier.event ? `🐋 CÁ TO XUẤT HIỆN!\n${who} đang kéo...` : `🎣 ${run.actionName.toUpperCase()}\n${who}`;
+      showBanner(s, p < FIGHT + 0.06 && !(legend && p >= 0.13 && p < 0.29), top);
+
+      // ---------- thời tiết theo bậc ----------
+      const sky = seg(p, BITE, FIGHT) * (1 - seg(p, SHOW_END, 0.98));
+      s.weather.setStorm(lvl >= 8 ? sky : lvl >= 7 ? 0.7 * sky : lvl >= 6 ? 0.4 * sky * (1 - seg(p, APEX, SHOW_END)) : 0);
+      s.weather.setRain(lvl >= 7 && p >= FIGHT && p < APEX + 0.05);
+      if (lvl >= 8) s.floodgate.setFlood(0.6 * easeInOut(seg(p, FIGHT, BURST)) * (1 - easeInOut(seg(p, BURST, SHOW_END))));
+      if (lvl >= 8) s.floodgate.setOpen(seg(p, FIGHT - 0.05, FIGHT) * (1 - seg(p, SHOW_END - 0.05, SHOW_END)));
+      flash(p);
+
+      // ---------- cảnh cắt đáy hồ (huyền thoại) ----------
+      if (legend) {
+        const fa = p < 0.1 ? 0 : p < 0.13 ? seg(p, 0.1, 0.13) : p < 0.16 ? 1 - seg(p, 0.13, 0.16) : p < 0.26 ? 0 : p < 0.28 ? seg(p, 0.26, 0.28) : 1 - seg(p, 0.28, 0.31);
+        s.fade.visible = fa > 0;
+        s.fade.alpha = fa;
+        const under = p >= 0.13 && p < 0.28;
+        s.underwater.root.visible = under;
+        uLine.clear();
+        if (under) {
+          const uk = s.underwater.king;
+          const bite = seg(p, 0.15, 0.2);
+          const hx = uk.x + 160;
+          const hy = lerp(-50, uk.y - 20, easeOut(seg(p, 0.13, 0.17)));
+          uLine.moveTo(hx, -50).lineTo(hx, hy).stroke({ width: 3, color: 0xffffff, alpha: 0.9 });
+          uLine.rect(hx - 8, hy - 4, 16, 12).fill(0xd4a373);
+          uk.setExpression(bite < 1 ? 'chomp' : 'shock');
+          uk.thrash = bite >= 1 ? 1 : 0.2;
+          uk.x = base.uKingX + (bite >= 1 ? Math.sin(ms / 50) * 12 : 0);
+          pop(uText, p, 0.18, 0.28, uk.x, uk.y - 240, 10);
+        } else uText.visible = false;
+      }
+
+      // ---------- cần thủ ----------
+      let hand = { x: standX, y: standY - 112 };
+      if (trip) {
+        const atLake = trip.move(p, 0, inPlace ? 0 : BITE, SHOW_END + 0.01, 0.99);
+        const w = trip.w;
+        if (atLake) {
+          w.facing = F.x >= w.x ? 1 : -1;
+          if (fighting) {
+            w.pose = 'pull';
+            // giật lùi theo từng cú
+            w.x -= w.facing * (10 + lvl * 2) * trip.sc * Math.abs(Math.sin(ms / (160 - lvl * 6)));
+          } else if (p >= BURST) w.pose = 'cheer';
+          else w.pose = 'idle';
         }
-      } else if (p < 0.95) {
-        s.boss.leanAngle = 0;
-        s.boss.setExpression('angry');
-        pose(s, 'scold');
-        s.boss.scale.x = fromX < SPOT.bossHome ? -1 : 1;
-      } else resetBoss(s);
-      fx.visible = p > 0.4 && p < 0.8;
-      fx.position.set(SPOT.bossHome + 110, 520 - 40 * seg(p, 0.4, 0.8));
-    },
-    finish() {
-      paper.destroy();
-      fx.destroy();
-      resetBoss(s);
-    }
-  };
-};
+        hand = trip.hand();
+      }
 
-// ---------------------------------------------------------------------------
-// 2. Vặt lá cây phát tài — nhân vật lẻn tới cây, vặt lá + lì xì; Sếp phát hiện, chạy tới ôm cây.
-// ---------------------------------------------------------------------------
-const pluckTree: AnimFactory = (s, run) => {
-  const trip = makeTrip(s, run);
-  const pick = bubble('Hái lộc nào!', 0xff6b35, 30);
-  pick.anchor.set(0.5);
-  const cry = bubble('CÂY PHÁT TÀI CỦA TAO!!');
-  cry.anchor.set(0.5);
-  cry.position.set(540, 470);
-  const snap = bubble('PHỰT!', 0x26a269, 40);
-  snap.anchor.set(0.5);
-  // Lá cắt từ ảnh cây: đống lá dưới gốc (sau cùng trong fx) + các cụm lá bay ra sau mỗi cú giật.
-  const PER_TUG = 6;
-  const pile = new Sprite(s.tree.pileTex ?? Texture.EMPTY);
-  pile.anchor.set(0.5, 1);
-  pile.visible = false;
-  const flying = new Container();
-  const leafSprites: Sprite[] = [];
-  s.fx.addChildAt(pile, 0);
-  s.fx.addChild(pick, cry, snap, flying);
-  const standX = TREE.x + 95;
-  const dur = run.durationMs;
-  // Pha vặt [P0,P1] gồm TUGS cú giật; mỗi cú: với tay (0..0.5) → giật (0.5) → cây rung + lá bắn ra.
-  const P0 = 0.16;
-  const P1 = 0.52;
-  const TUGS = 4;
-  const tugMs = ((P1 - P0) * dur) / TUGS;
-  const canopyY = TREE.y - 175;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      trip.move(p, 0, P0, P1, 0.68, standX, SPOT.floorY + 20);
-      const pulling = p >= P0 && p < P1;
-      const tt = pulling ? seg(p, P0, P1) * TUGS : p >= P1 ? TUGS : 0;
-      const tug = Math.min(TUGS - 1, Math.floor(tt));
-      const f = tt - tug;
-      const yanked = pulling ? tug + (f >= 0.5 ? 1 : 0) : p >= P1 ? TUGS : 0;
-      // đứng cạnh cây thì đẩy bảng tên sang phải để không che tán cây
-      trip.w.shiftTag(p > P0 * 0.6 && p < P1 + 0.06 ? trip.w.tagHalfW - 40 : 0);
-      if (pulling) {
-        trip.w.face(-1);
-        // với tay lên cây rồi ngả người ra sau khi giật
-        trip.w.pose(f < 0.5 ? 'cheer' : 'shout');
-        trip.w.x += f < 0.5 ? -10 * seg(f, 0, 0.5) : -10 + 26 * Math.sin(Math.PI * seg(f, 0.5, 1));
-      } else trip.w.pose(null);
-      pick.visible = p > P0 && p < P0 + 0.12;
-      pick.position.set(trip.w.x, trip.w.y - 240);
+      // ---------- vị trí lưỡi câu / cá dưới nước ----------
+      const dart = 30 + lvl * 14;
+      const hook = {
+        x: F.x + Math.sin(ms / (420 - lvl * 20)) * dart * fightK,
+        y: F.y + Math.sin(ms / (300 - lvl * 12) + 1) * dart * 0.35 * fightK
+      };
 
-      // Cây: đổi khung theo số cú đã giật, rung mạnh ngay sau mỗi cú, mọc lại ở cuối
-      const regrow = seg(p, 0.9, 1);
-      s.tree.setLeaves(TREE.leaves * (1 - (yanked / TUGS) * (1 - regrow)));
-      const since = pulling && f >= 0.5 ? (f - 0.5) * tugMs : Infinity;
-      const shake = since < 450 ? Math.sin(since / 35) * (1 - since / 450) : 0;
-      s.tree.root.rotation = shake * 0.09;
-      s.tree.root.x = TREE.x + shake * 6;
-      snap.visible = since < 380;
-      snap.position.set(TREE.x + 30, canopyY - 60 - since * 0.06);
-
-      // Cụm lá (ảnh thật) bắn ra từ tán sau mỗi cú giật, xoay và rơi xuống đất
-      const tex = s.tree.leafTex;
-      let used = 0;
-      if (tex.length)
-        for (let j = 0; j < yanked && j < TUGS; j++) {
-          const age = ms - (P0 * dur + (j + 0.5) * tugMs);
-          if (age < 0 || age > 1100) continue;
-          const t = age / 1000;
-          for (let i = 0; i < PER_TUG; i++) {
-            const r = hash(`${run.runId}:${j}:${i}`);
-            const sp = (leafSprites[used] ??= flying.addChild(new Sprite({ texture: tex[0]!, anchor: 0.5 })));
-            used++;
-            sp.texture = tex[(r >> 3) % tex.length]!;
-            const vx = ((r % 200) - 60) * 2.2; // phần lớn bắn về phía người vặt (bên phải)
-            const vy = -180 - ((r >> 8) % 220);
-            sp.x = TREE.x + ((r >> 4) % 90) - 45 + vx * t;
-            sp.y = Math.min(TREE.y - 12, canopyY + ((r >> 12) % 60) + vy * t + 900 * t * t);
-            sp.rotation = (((r >> 6) % 2) * 2 - 1) * t * 6;
-            sp.scale.set(0.28 + ((r >> 10) % 10) * 0.02);
-            sp.alpha = age > 900 ? 1 - (age - 900) / 200 : 1;
-            sp.visible = true;
+      // ---------- mặt nước: xoáy + gợn + bóng cá ----------
+      water.clear();
+      shadow.clear();
+      const vortex = seg(p, FIGHT, FIGHT + 0.08) * (1 - seg(p, BURST + 0.02, APEX));
+      if (vortex > 0) {
+        const rings = 2 + Math.ceil(lvl / 2);
+        for (let j = 0; j < rings; j++) {
+          const R = 50 + j * (36 + lvl * 6);
+          water.ellipse(hook.x, hook.y + 20, R, R * 0.32).stroke({ width: 5, color: 0xdff6ff, alpha: 0.6 * vortex });
+          for (let i = 0; i < 5; i++) {
+            const a = ms / (220 + j * 70) + (i / 5) * TAU + j;
+            water.rect(hook.x + Math.cos(a) * R - 6, hook.y + 20 + Math.sin(a) * R * 0.32 - 4, 12, 8).fill({ color: 0xffffff, alpha: vortex });
           }
         }
-      for (let i = used; i < leafSprites.length; i++) leafSprites[i]!.visible = false;
-
-      // Đống lá dưới gốc lớn dần theo số cú, biến mất khi cây mọc lại
-      const amount = (yanked / TUGS) * (1 - regrow);
-      if (pile.texture === Texture.EMPTY && s.tree.pileTex) pile.texture = s.tree.pileTex;
-      pile.visible = amount > 0 && pile.texture !== Texture.EMPTY;
-      pile.position.set(TREE.x + 20, TREE.y + 4);
-      pile.scale.set(0.12 + 0.3 * amount, 0.08 + 0.32 * amount);
-
-      // Sếp: quay lại thấy → chạy tới cây → ôm cây tuyệt vọng → về chỗ
-      if (p < 0.5) pose(s, null);
-      else if (p < 0.58) {
-        pose(s, 'shocked');
-        s.boss.setExpression('shock');
-      } else if (p < 0.7) {
-        pose(s, null);
-        s.boss.running = true;
-        s.boss.setExpression('angry');
-        walkBoss(s, SPOT.bossHome, TREE.x + 120, seg(p, 0.58, 0.7));
-      } else if (p < 0.86) {
-        s.boss.walking = false;
-        s.boss.running = false;
-        s.boss.x = TREE.x + 120;
-        s.boss.scale.x = -1;
-        pose(s, 'despair');
-        s.boss.setExpression('helpless');
-      } else {
-        pose(s, null);
-        walkBoss(s, TREE.x + 120, SPOT.bossHome, seg(p, 0.86, 0.98));
       }
-      cry.visible = p > 0.52 && p < 0.76;
-      cry.position.y = 470 + (Math.floor(ms / 90) % 2) * 5;
-    },
-    finish() {
-      trip.done();
-      s.tree.setLeaves(TREE.leaves);
-      s.tree.root.rotation = 0;
-      s.tree.root.x = TREE.x;
-      pick.destroy();
-      cry.destroy();
-      snap.destroy();
-      pile.destroy();
-      flying.destroy();
-      resetBoss(s);
-    }
-  };
-};
-
-// ---------------------------------------------------------------------------
-// 3. Vẽ bậy lên bảng KPI — Sếp mải nghe điện thoại; nhân vật lên vẽ biếm hoạ "SẾP HÓI";
-//    Sếp quay lại thấy, nổi điên, xoá bảng.
-// ---------------------------------------------------------------------------
-const doodleKpi: AnimFactory = (s, run) => {
-  const trip = makeTrip(s, run);
-  const sketch = bubble('Xoẹt xoẹt...', 0x1c71d8, 30);
-  sketch.anchor.set(0.5);
-  const angry = bubble('AI VẼ ĐẤY?!');
-  angry.anchor.set(0.5);
-  angry.position.set(SPOT.bossHome + 150, 500);
-  s.fx.addChild(sketch, angry);
-  const standX = KPI_BOARD.x + 70;
-  const away = SPOT.bossHome + 170;
-  const dur = run.durationMs;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      trip.move(p, 0, 0.16, 0.44, 0.6, standX, SPOT.floorY + 10);
-      trip.w.pose(p >= 0.18 && p < 0.42 ? 'tablet' : null);
-      sketch.visible = p > 0.18 && p < 0.42;
-      sketch.position.set(trip.w.x + 40, trip.w.y - 240);
-      // vẽ dần trong lúc đứng ở bảng; Sếp xoá ở cuối
-      s.doodle.reveal(easeInOut(seg(p, 0.18, 0.42)));
-      s.doodle.root.alpha = 1 - seg(p, 0.86, 0.96);
-      if (p < 0.08) pose(s, null);
-      else if (p < 0.46) {
-        // Sếp quay lưng ra góc nghe điện thoại
-        pose(s, 'phone');
-        walkBoss(s, SPOT.bossHome, away, seg(p, 0.02, 0.1));
-      } else if (p < 0.56) {
-        s.boss.x = away;
-        s.boss.walking = false;
-        s.boss.scale.x = -1;
-        pose(s, 'shocked');
-        s.boss.setExpression('shock');
-      } else if (p < 0.84) {
-        s.boss.x = away;
-        s.boss.scale.x = -1;
-        pose(s, 'rage');
-        s.boss.setExpression('angry');
-        s.boss.shakeAmount = 3;
-      } else {
-        s.boss.shakeAmount = 0;
-        pose(s, null);
-        walkBoss(s, away, SPOT.bossHome, seg(p, 0.84, 0.98));
+      if (p >= BITE && p < FIGHT) for (let i = 0; i < 3; i++) ripple(water, F.x, F.y + 20, (ms / 700 + i / 3) % 1, 90 + lvl * 10);
+      if (!isKing && p >= FIGHT - 0.04 && p < BURST) {
+        const len = tier.len * 0.9;
+        shadow.ellipse(hook.x - side * len * 0.2, hook.y + 30, len / 2, len * 0.14).fill({ color: 0x0b2238, alpha: 0.45 * seg(p, FIGHT - 0.04, FIGHT) });
       }
-      angry.visible = p > 0.5 && p < 0.82;
-    },
-    finish() {
-      trip.done();
-      s.doodle.reveal(0);
-      s.doodle.root.alpha = 1;
-      sketch.destroy();
-      angry.destroy();
-      resetBoss(s);
-    }
-  };
-};
 
-// ---------------------------------------------------------------------------
-// 9. Ngắt cầu dao — nhân vật gạt cầu dao, văn phòng tối om; Sếp hoảng loạn trong bóng tối,
-//    điện chập chờn có lại, Sếp nổi điên.
-// ---------------------------------------------------------------------------
-const blackout: AnimFactory = (s, run) => {
-  const trip = makeTrip(s, run);
-  const { darkness } = s.breaker;
-  const clack = bubble('CẠCH!', 0x8f5b00, 34);
-  clack.anchor.set(0.5);
-  clack.position.set(BREAKER.x, BREAKER.y - 70);
-  const who = bubble('AI TẮT ĐIỆN?!', 0xe01b24, 46);
-  who.anchor.set(0.5);
-  who.position.set(540, 520);
-  const giggle = bubble('Hí hí...', 0xffd166, 30);
-  giggle.anchor.set(0.5);
-  const eyes = new Graphics();
-  s.fx.addChild(clack, who, giggle, eyes);
-  const dur = run.durationMs;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      trip.move(p, 0, 0.14, 0.22, 0.4, BREAKER.x + 30, SPOT.floorY + 10);
-      s.breaker.setOff(p > 0.18 && p < 0.72);
-      clack.visible = p > 0.18 && p < 0.26;
-      // tối dần; cuối pha điện chập chờn rồi sáng lại
-      let a = 0;
-      if (p > 0.18 && p < 0.66) a = 0.82 * seg(p, 0.18, 0.22);
-      else if (p >= 0.66 && p < 0.74) a = Math.floor(ms / 90) % 2 ? 0.82 : 0.2;
-      darkness.visible = a > 0;
-      darkness.alpha = a;
-      // trong bóng tối chỉ thấy mắt Sếp đảo qua lại
-      eyes.clear();
-      if (p > 0.26 && p < 0.66) {
-        const ex = SPOT.bossHome + Math.sin(ms / 300) * 30;
-        eyes.rect(ex - 22, 590, 12, 12).fill(0xffffff).rect(ex + 10, 590, 12, 12).fill(0xffffff);
-      }
-      who.visible = p > 0.3 && p < 0.64;
-      giggle.visible = p > 0.24 && p < 0.38;
-      giggle.position.set(trip.w.x, trip.w.y - 230);
-      if (p < 0.2) pose(s, null);
-      else if (p < 0.66) {
-        pose(s, 'sos');
-        s.bossDesk.visible = !s.boss.hasSprites;
-        s.boss.setExpression('panic');
-        s.boss.shakeAmount = 2;
-      } else if (p < 0.94) {
-        s.bossDesk.visible = true;
-        s.boss.shakeAmount = 3;
-        pose(s, 'rage');
-        s.boss.setExpression('angry');
-      } else resetBoss(s);
-    },
-    finish() {
-      trip.done();
-      s.breaker.setOff(false);
-      darkness.visible = false;
-      darkness.alpha = 0;
-      clack.destroy();
-      who.destroy();
-      giggle.destroy();
-      eyes.destroy();
-      resetBoss(s);
-    }
-  };
-};
-
-// ---------------------------------------------------------------------------
-// 4. Xịt lốp xe Sếp — CẢNH CẮT ra bãi đỗ xe: nhân viên (có bảng tên) lẻn tới xịt lốp,
-//    Sếp chạy ra nổi điên rồi đành đi xe máy về.
-// ---------------------------------------------------------------------------
-const flatTire: AnimFactory = (s, run) => {
-  const P = s.parking;
-  const { rearWheel, puff, root: car } = P.car;
-  const name = run.actor?.displayName ?? 'Nhân viên ẩn danh';
-  const seat = s.classroom.seatOf(name);
-  const shirt = DEPARTMENTS[seat?.dept ?? hash(name) % DEPARTMENTS.length]!.shirt;
-  P.walker.setPerson(name, { ...lookFor(seat?.member?.platformId ?? name, shirt), tie: seat?.member?.follower ?? false });
-  // Nhân vật của người xịt đang ở bãi xe → ghế trống.
-  if (seat?.member) seat.person.visible = false;
-  let wheelX = car.x + rearWheel.x * car.scale.x;
-  let groundY = car.y + 6 * car.scale.y;
-  let sprayX = wheelX - 70 * car.scale.x;
-  const spray = new Graphics();
-  const hiss = bubble('XÌÌÌ...', 0x3d405b);
-  hiss.anchor.set(0.5);
-  const giggle = bubble('Hí hí!', 0xff6b35, 40);
-  giggle.anchor.set(0.5);
-  const yell = bubble('XE CỦA TAOOO!');
-  yell.anchor.set(0.5);
-  const bye = bubble('Thôi đi xe máy vậy...', 0x3d405b, 34);
-  bye.anchor.set(0.5);
-  P.fx.addChild(spray, hiss, giggle, yell, bye);
-  const dur = run.durationMs;
-
-  const showParking = (on: boolean) => {
-    P.root.visible = on;
-    s.office.visible = !on;
-  };
-
-  return {
-    update(ms) {
-      // ảnh bãi xe/xe tải xong có thể dời xe → tính lại vị trí mỗi khung
-      wheelX = car.x + rearWheel.x * car.scale.x;
-      groundY = car.y + 6 * car.scale.y;
-      sprayX = wheelX - 70 * car.scale.x;
-      const p = clamp01(ms / dur);
-      // --- chuyển cảnh: tối dần → bãi xe → tối dần → văn phòng ---
-      const fadeA =
-        p < 0.06 ? seg(p, 0, 0.06) : p < 0.12 ? 1 - seg(p, 0.06, 0.12) : p < 0.92 ? 0 : p < 0.96 ? seg(p, 0.92, 0.96) : 1 - seg(p, 0.96, 1);
-      s.fade.visible = fadeA > 0;
-      s.fade.alpha = fadeA;
-      showParking(p >= 0.06 && p < 0.96);
-      s.banner.visible = p > 0.08 && p < 0.3;
-      s.bannerText.text = 'BÃI ĐỖ XE CÔNG TY';
-      if (!P.root.visible) return;
-
-      // --- nhân viên lẻn tới, xịt, cười rồi chạy ---
-      const w = P.walker;
-      w.visible = p < 0.72;
-      w.y = groundY;
-      if (p < 0.34) {
-        w.walking = true;
-        w.face(1);
-        w.crouch(0);
-        w.x = lerp(-90, sprayX, easeInOut(seg(p, 0.1, 0.34)));
-      } else if (p < 0.58) {
-        w.walking = false;
-        w.x = sprayX;
-        w.crouch(1);
-      } else {
-        w.crouch(0);
-        w.walking = p > 0.6;
-        w.face(-1);
-        w.x = lerp(sprayX, -120, easeIn(seg(p, 0.6, 0.72)));
-      }
-      w.can.visible = p >= 0.34 && p < 0.58;
+      // ---------- bọt nước + bong bóng ----------
       spray.clear();
-      if (p >= 0.36 && p < 0.58)
-        for (let i = 0; i < 6; i++) {
-          const k = (ms / 300 + i / 6) % 1;
-          spray.rect(sprayX + 30 + k * 40, groundY - 50 + Math.sin(i * 7) * 10 * k, 6, 6).fill({ color: 0xffffff, alpha: 1 - k });
+      if (fighting) {
+        const every = Math.max(260, 650 - lvl * 50);
+        for (let j = 0; j < 3; j++) {
+          const n = Math.floor(ms / every) - j;
+          if (n < 0) continue;
+          const age = (ms - n * every) / (every * 2.2);
+          splash(spray, hook.x + ((hash(`${seed}:${n}`) % 80) - 40), hook.y, age, seed + n, 6 + lvl, 70 + lvl * 12, 160 + lvl * 25);
         }
+        for (let i = 0; i < 5 + lvl; i++) {
+          const kk = (ms / 900 + i / (5 + lvl)) % 1;
+          const bx = hook.x + Math.sin(i * 2.7 + ms / 300) * (40 + lvl * 8);
+          const by = hook.y + 30 - kk * 50;
+          spray.circle(bx, by, 4 + (i % 3) * 3).stroke({ width: 3, color: 0xffffff, alpha: 1 - kk });
+        }
+      }
+      // cú phóng khỏi mặt nước: bọt lớn
+      splash(spray, F.x, F.y + 10, seg(p, BURST, BURST + 0.12), seed + 999, 14 + lvl * 3, 160 + lvl * 25, 380 + lvl * 40);
+      ripple(spray, F.x, F.y + 30, seg(p, BURST, BURST + 0.14), 260 + lvl * 30, 0xffffff, 8);
 
-      // --- lốp xẹp ---
-      const flat = easeOut(seg(p, 0.38, 0.56));
-      rearWheel.scale.set(1 + 0.2 * flat, 1 - 0.55 * flat);
-      car.rotation = -0.05 * flat;
-      puff.alpha = p > 0.38 && p < 0.62 ? (Math.floor(ms / 120) % 2 ? 1 : 0.5) : 0;
-      hiss.visible = p > 0.38 && p < 0.58;
-      hiss.position.set(wheelX, groundY - 130 + (Math.floor(ms / 100) % 2) * 4);
-      giggle.visible = p > 0.58 && p < 0.7;
-      giggle.position.set(Math.max(80, w.x), groundY - 240);
-
-      // --- Sếp chạy ra ---
-      const b = P.boss;
-      b.visible = p > 0.62 && p < 0.94;
-      if (b.visible) {
-        if (p < 0.66) {
-          b.position.set(P.doorX, P.doorY);
-          b.setPose('shocked');
-          b.setExpression('shock');
-        } else if (p < 0.76) {
-          b.walking = true;
-          b.running = true;
-          b.setPose(null);
-          b.setExpression('angry');
-          b.position.set(lerp(P.doorX, car.x + 120, seg(p, 0.66, 0.76)), lerp(P.doorY, groundY - 150, seg(p, 0.66, 0.76)));
-        } else if (p < 0.85) {
-          b.walking = false;
-          b.walking = false;
-          b.running = false;
-          b.setPose('rage');
-          b.setExpression('angry');
-          b.shakeAmount = 4;
+      // ---------- cá phóng lên + xoay vòng → khoe giữa màn hình → về tay cần thủ / về hồ ----------
+      const jump = seg(p, BURST, APEX);
+      const show = p >= APEX && p < SHOW_END;
+      const exit = seg(p, SHOW_END, 0.97);
+      let fx = F.x;
+      let fy = F.y;
+      let rot = 0;
+      let sc = 1;
+      if (p >= BURST && p < APEX) {
+        const j = easeOut(jump);
+        fx = lerp(F.x, apex.x, j);
+        fy = lerp(F.y, apex.y, j) - Math.sin(jump * Math.PI) * (120 + lvl * 15);
+        rot = turns * TAU * easeOut(jump);
+        sc = lerp(0.6, 1.15, j);
+      } else if (show) {
+        fx = apex.x;
+        fy = apex.y + Math.sin(ms / 260) * 10;
+        rot = Math.sin(ms / 180) * 0.12;
+        sc = 1.15 + 0.05 * Math.sin(ms / 140);
+      } else if (p >= SHOW_END) {
+        const e = easeIn(exit);
+        const tx = isKing ? KH.x : trip ? trip.w.x : apex.x;
+        const ty = isKing ? KH.y : trip ? trip.w.y - 60 * trip.sc : apex.y;
+        fx = lerp(apex.x, tx, e);
+        fy = lerp(apex.y, ty, e) - Math.sin(exit * Math.PI) * 80;
+        rot = isKing ? 0 : e * TAU;
+        sc = lerp(1.15, isKing ? 1 : 0.35, e);
+      }
+      if (fishG) {
+        fishG.visible = p >= BURST && exit < 1;
+        fishG.position.set(fx, fy);
+        fishG.rotation = rot;
+        fishG.scale.set(sc * side * baseScale, sc * baseScale); // đầu quay về phía người kéo
+        fishG.alpha = 1 - seg(exit, 0.8, 1);
+      }
+      if (kingSprite && p >= BURST) {
+        // ảnh Cá Thần đang bay; s.king ẩn dưới hồ, hiện lại khi ảnh rơi về
+        k.position.set(KH.x, KH.y);
+        k.alpha = exit >= 1 ? base.kAlpha : 0;
+        k.thrash = 0;
+        k.spin = 0;
+      } else if (isKing) {
+        // Cá Thần: dùng chính s.king
+        if (p < FIGHT) {
+          // huyền thoại kéo tại chỗ: Cá Thần dời tới gần phao người kéo (trong lúc cảnh cắt đáy hồ che)
+          const go = legend ? easeInOut(seg(p, 0.12, 0.28)) : 0;
+          k.position.set(lerp(KH.x, F.x, go), lerp(KH.y, F.y, go));
+          k.rise = lerp(base.rise, legend ? 0.2 : 0.4, seg(p, 0, FIGHT));
+          k.thrash = 0;
+          k.spin = 0;
+          k.setExpression(legend && p > 0.12 ? 'chomp' : null);
+        } else if (fighting) {
+          const crowdDrag = crowd ? easeInOut(fightK) * 0.25 : 0;
+          k.position.set(hook.x, lerp(hook.y, LAKE_SPOTS.shoreY - 60, crowdDrag));
+          k.rise = 0.5 + 0.3 * fightK;
+          k.thrash = 0.7 + 0.3 * Math.sin(ms / 90);
+          k.spin = Math.sin(ms / 140) * 0.12;
+          k.setExpression(fightK < 0.4 ? 'shock' : 'hit');
         } else {
-          b.shakeAmount = 0;
-          b.setPose('motorbike');
-          b.setExpression('helpless');
-          b.scale.x = 1;
-          b.x = lerp(car.x + 120, 1300, easeIn(seg(p, 0.85, 0.94)));
+          k.position.set(fx, fy);
+          k.scale.set(base.kScaleX * sc, base.kScaleY * sc);
+          k.rise = 1;
+          k.spin = p < APEX ? rot : 0;
+          k.thrash = show ? 0.25 : 0;
+          k.setExpression(show ? 'dizzy' : p >= SHOW_END ? 'happy' : 'shock');
         }
       }
-      yell.visible = p > 0.76 && p < 0.86;
-      yell.position.set(car.x + 60, groundY - 440 + (Math.floor(ms / 90) % 2) * 6);
-      bye.visible = p > 0.86 && p < 0.93;
-      bye.position.set(Math.min(880, b.x), groundY - 420);
-    },
-    finish() {
-      showParking(false);
-      if (seat?.member) seat.person.visible = true;
-      s.fade.visible = false;
-      s.fade.alpha = 0;
-      s.banner.visible = false;
-      rearWheel.scale.set(1);
-      car.rotation = 0;
-      puff.alpha = 0;
-      P.walker.visible = false;
-      P.walker.can.visible = false;
-      P.boss.visible = false;
-      P.boss.setPose(null);
-      P.boss.setExpression(null);
-      P.boss.shakeAmount = 0;
-      P.boss.walking = false;
-      P.boss.running = false;
-      P.boss.scale.x = 1;
-      spray.destroy();
-      hiss.destroy();
-      giggle.destroy();
-      yell.destroy();
-      bye.destroy();
-    }
-  };
-};
+      // Cá Thần rơi về hồ: bọt lớn
+      if (isKing) splash(spray, KH.x, KH.y + 10, seg(p, 0.97, 1), seed + 77, 16, 200, 300);
 
-// ---------------------------------------------------------------------------
-// 5. Khóa nhà vệ sinh — Sếp tới WC, cửa khoá, lay cửa, bỏ chạy ra lối thoát rồi lết về.
-// ---------------------------------------------------------------------------
-const lockToilet: AnimFactory = (s, run) => {
-  const fx = bubble('!!!');
-  fx.anchor.set(0.5);
-  fx.visible = false;
-  const click = bubble('CẠCH!', 0x8f5b00, 34);
-  click.anchor.set(0.5);
-  click.position.set(SPOT.wcDoor, SPOT.wcLockY - 90);
-  s.fx.addChild(fx, click);
-  // Người khoá WC tự đi tới cửa, bấm khoá rồi chuồn về chỗ.
-  const trip = makeTrip(s, run);
-  const dur = run.durationMs;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      trip.move(p, 0, 0.15, 0.2, 0.34, SPOT.wcDoor - 70, SPOT.floorY + 20);
-      s.wcLock.visible = p > 0.16 && p < 0.95;
-      click.visible = p > 0.16 && p < 0.24;
-      if (p < 0.3) pose(s, null);
-      else if (p < 0.46) {
-        walkBoss(s, SPOT.bossHome, SPOT.wcDoor - 90, seg(p, 0.3, 0.46));
-      } else if (p < 0.62) {
-        s.boss.walking = false;
-        pose(s, 'shocked');
-        s.boss.setExpression('panic');
-        s.wcDoor.x = s.wcLock.x = SPOT.wcDoor + (Math.floor(ms / 60) % 2 ? 6 : -6);
-        fx.visible = true;
-        fx.position.set(SPOT.wcDoor - 90, 480);
-      } else if (p < 0.8) {
-        s.wcDoor.x = s.wcLock.x = SPOT.wcDoor;
-        fx.visible = false;
-        pose(s, null);
-        s.boss.running = true;
-        walkBoss(s, SPOT.wcDoor - 90, SPOT.exitDoor, seg(p, 0.62, 0.76));
-        s.boss.alpha = 1 - seg(p, 0.74, 0.8);
+      // ---------- cần câu cong vút + dây căng rung ----------
+      rodG.clear();
+      const tension = fighting ? 0.6 + 0.4 * Math.abs(Math.sin(ms / 120)) : p >= BITE && p < FIGHT ? 0.25 : 0;
+      const lineEnd = p < BURST ? hook : { x: fx, y: fy };
+      const lineOn = p >= BITE && p < APEX + 0.02;
+      if (trip && p >= BITE && p < SHOW_END) {
+        const L = 200 * trip.sc;
+        const dirX = F.x >= hand.x ? 1 : -1;
+        const t0 = { x: hand.x + dirX * L * 0.5, y: hand.y - L * 0.86 };
+        const toward = Math.atan2(lineEnd.y - hand.y, lineEnd.x - hand.x);
+        const bent = { x: hand.x + Math.cos(toward) * L * 0.75, y: hand.y + Math.sin(toward) * L * 0.75 };
+        const bend = Math.min(1, tension * (0.6 + lvl * 0.06));
+        const tip = { x: lerp(t0.x, bent.x, bend * 0.75), y: lerp(t0.y, bent.y, bend * 0.75) };
+        const ctrl = { x: hand.x + (t0.x - hand.x) * 0.6, y: hand.y + (t0.y - hand.y) * 0.6 };
+        rodG.moveTo(hand.x, hand.y).quadraticCurveTo(ctrl.x, ctrl.y, tip.x, tip.y).stroke({ width: Math.max(5, 11 * trip.sc), color: INK });
+        rodG.moveTo(hand.x, hand.y).quadraticCurveTo(ctrl.x, ctrl.y, tip.x, tip.y).stroke({ width: Math.max(3, 6 * trip.sc), color: 0xc49a6c });
+        rodG.rect(hand.x - 9, hand.y - 6, 18, 14).fill(INK).rect(hand.x - 6, hand.y - 3, 12, 8).fill(0x5e5c64);
+        if (lineOn) drawLine(rodG, tip, lineEnd, tension, ms, lvl);
+      }
+      if (crowd && p >= BITE && p < APEX) {
+        const mouth = p < BURST ? { x: k.x, y: k.y - 20 } : { x: fx, y: fy };
+        for (const sp of spots) rodG.moveTo(sp.rodTip.x, sp.rodTip.y).lineTo(mouth.x, mouth.y);
+        if (spots.length) rodG.stroke({ width: 2, color: 0xffffff, alpha: 0.6 });
+        const anchor = { x: 540, y: LAKE_SPOTS.shoreY + 30 };
+        drawLine(rodG, anchor, mouth, tension, ms, lvl, 9);
+      }
+      // phao lúc cá cắn câu
+      if (p >= BITE && p < FIGHT && !legend) {
+        const dip = Math.floor(ms / 180) % 2 ? 10 : 0;
+        rodG.rect(F.x - 9, F.y - 18 + dip, 18, 24).fill(INK).rect(F.x - 6, F.y - 15 + dip, 12, 9).fill(0xe01b24).rect(F.x - 6, F.y - 6 + dip, 12, 9).fill(0xffffff);
+      }
+
+      // ---------- người xem quanh hồ + rung màn hình ----------
+      if (crowd) {
+        const beat = (ms % 900) / 900;
+        s.anglers.pullAll(p >= BITE && p < BURST ? 0.35 + 0.65 * Math.max(0, Math.sin(beat * Math.PI)) : 0);
+        react(p >= BITE && p < BURST ? 'pull' : p >= BURST && p < SHOW_END + 0.04 ? 'cheer' : null);
       } else {
-        s.boss.running = false;
-        s.boss.setExpression('helpless');
-        s.boss.alpha = seg(p, 0.82, 0.85);
-        if (p < 0.96) walkBoss(s, SPOT.exitDoor, SPOT.bossHome, seg(p, 0.82, 0.96));
-        else {
-          s.boss.walking = false;
-          s.boss.scale.x = 1;
-          pose(s, 'weary');
+        react(p >= FIGHT && p < BURST && lvl >= 7 ? 'scared' : p >= BURST && p < SHOW_END + 0.04 ? 'cheer' : null);
+      }
+      const shake = fighting ? shakeMax * (0.35 + 0.35 * fightK) : p >= BURST && p < BURST + 0.08 ? shakeMax : p >= BURST + 0.08 && p < APEX ? shakeMax * (1 - seg(p, BURST + 0.08, APEX)) : 0;
+      s.setShake(shake);
+
+      // ---------- tia sáng + pháo hoa ----------
+      const raysOn = p >= APEX - 0.03 && p < SHOW_END + 0.02;
+      rays.visible = raysOn;
+      if (raysOn) {
+        rays.rotation = ms / 1600;
+        rays.alpha = seg(p, APEX - 0.03, APEX) * (1 - seg(p, SHOW_END - 0.02, SHOW_END + 0.02));
+        rays.scale.set(0.9 + 0.08 * Math.sin(ms / 200));
+      }
+      fireworks.clear();
+      for (const b of bursts) {
+        const age = (p - b.t) * dur;
+        if (age < -260 || age > 1100) continue;
+        if (age < 0) {
+          // vệt pháo bay lên
+          const k2 = 1 + age / 260;
+          fireworks.rect(b.x - 3, lerp(b.y + 400, b.y, k2), 6, 22).fill({ color: 0xfff3a0, alpha: 0.9 });
+          continue;
+        }
+        const t = age / 1000;
+        for (let i = 0; i < b.n; i++) {
+          const a = (i / b.n) * TAU;
+          const v = 260 + (i % 3) * 40;
+          const x = b.x + Math.cos(a) * v * t;
+          const y = b.y + Math.sin(a) * v * t + 260 * t * t;
+          fireworks.rect(x - 4, y - 4, 8, 8).fill({ color: i % 4 ? b.c : 0xffffff, alpha: 1 - t * 0.85 });
         }
       }
-    },
-    finish() {
-      trip.done();
-      click.destroy();
-      s.wcLock.visible = false;
-      s.wcDoor.x = s.wcLock.x = SPOT.wcDoor;
-      fx.destroy();
-      resetBoss(s);
-    }
-  };
-};
-
-// ---------------------------------------------------------------------------
-// 6. Đình công toàn công ty — Sếp gọi cứu trợ; nhân viên giơ biển, kéo nhau ra cửa.
-// ---------------------------------------------------------------------------
-const strike: AnimFactory = (s, run) => {
-  const banner = bubble('ĐÌNH CÔNG!!!');
-  banner.anchor.set(0.5);
-  banner.position.set(540, 860);
-  banner.scale.set(1.4);
-  s.fx.addChild(banner);
-  const seats = s.classroom.occupied();
-  const dur = run.durationMs;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      banner.visible = p < 0.8;
-      banner.scale.set(1.4 + (Math.floor(ms / 200) % 2) * 0.06);
-      seats.forEach((st, i) => {
-        const delay = (i % 12) * 0.02;
-        st.sign.visible = p > 0.05 && p < 0.85;
-        st.sign.y = -60 - (Math.floor(ms / 150 + i) % 2) * 10;
-        const out = easeInOut(seg(p, 0.2 + delay, 0.55 + delay));
-        const back = easeInOut(seg(p, 0.8, 0.98));
-        const k = out * (1 - back);
-        // đi về phía cửa thoát hiểm (toạ độ bên trong ghế đã thu nhỏ)
-        st.person.x = lerp(0, (SPOT.exitDoor - st.x) / st.s, k);
-        st.person.y = lerp(0, (SPOT.floorY - st.y) / st.s, k);
-        st.person.alpha = 1 - 0.9 * seg(p, 0.45 + delay, 0.6 + delay) * (1 - back);
-      });
-      if (p < 0.5) {
-        // Sếp ngồi bàn gọi cứu trợ (ảnh đã có bàn → ẩn bàn vẽ sẵn)
-        s.bossDesk.visible = !s.boss.hasSprites;
-        pose(s, 'sos');
-        s.boss.setExpression('panic');
-        s.boss.shakeAmount = 2;
-      } else if (p < 0.8) {
-        s.bossDesk.visible = true;
-        pose(s, null);
-        const r = seg(p, 0.5, 0.8);
-        s.boss.x = SPOT.bossHome + Math.sin(r * Math.PI * 4) * 200;
-        s.boss.walking = true;
-        s.boss.running = true;
-        s.boss.scale.x = Math.cos(r * Math.PI * 4) >= 0 ? 1 : -1;
-      } else {
-        s.boss.x = SPOT.bossHome;
-        s.boss.walking = false;
-        s.boss.scale.x = 1;
-        pose(s, 'despair');
-        s.boss.setExpression('helpless');
+      if (lvl === 0 && show) for (let i = 0; i < 6; i++) heart(fireworks, apex.x - 170 + i * 64, apex.y - 120 - ((ms / 1200 + i / 6) % 1) * 160, 1 - ((ms / 1200 + i / 6) % 1));
+      if (show) for (let i = 0; i < 6 + lvl; i++) {
+        const a = ms / 700 + (i / (6 + lvl)) * TAU;
+        sparkle(fireworks, apex.x + Math.cos(a) * (tier.len * 0.7 + 90), apex.y + Math.sin(a) * 90, 10 + (i % 2) * 6, 0.9);
       }
+
+      // ---------- chữ ----------
+      const wy = trip ? trip.headY() - 70 : LAKE_SPOTS.waterBottomY - 60;
+      const wx = trip ? Math.max(150, Math.min(930, trip.w.x)) : 540;
+      pop(hookText, p, BITE, FIGHT + 0.04, F.x, F.y - 150 - lvl * 6, 20);
+      if (fighting) {
+        const per = crowd ? 900 : Math.max(450, 800 - lvl * 40);
+        const beat = (ms % per) / per;
+        const n = Math.floor(ms / per);
+        pullText.visible = beat < 0.65;
+        pullText.position.set(wx + (n % 2 ? 90 : -90), wy - 30 * beat);
+        pullText.scale.set(1 + 0.25 * (1 - beat));
+        pullText.alpha = 1;
+      } else pullText.visible = false;
+      pop(big, p, APEX - 0.02, SHOW_END + 0.04, 540, bannerY, 0);
     },
     finish() {
-      banner.destroy();
-      for (const st of s.classroom.seats) {
-        st.sign.visible = false;
-        st.person.position.set(0, 0);
-        st.person.alpha = 1;
-      }
-      resetBoss(s);
+      trip?.done();
+      killFx();
+      killWater();
+      killU();
+      if (crowd) s.anglers.pullAll(0);
+      restore(s, base);
     }
   };
-};
+}
 
-// ---------------------------------------------------------------------------
-// 7. Làm treo máy tính Sếp — Sếp ra góc phòng loay hoay với máy tính hỏng.
-// ---------------------------------------------------------------------------
-const crashPc: AnimFactory = (s, run) => {
-  const err = bubble('LỖI 404!', 0x3584e4, 40);
-  err.anchor.set(0.5);
-  err.position.set(SPOT.bossHome + 40, 480);
-  const q = bubble('???', 0x3d405b, 40);
-  q.anchor.set(0.5);
-  q.position.set(SPOT.bossHome - 60, 440);
-  s.fx.addChild(err, q);
-  // Người phá tự lẻn lên rút phích máy tính của Sếp rồi chuồn về.
-  const trip = makeTrip(s, run);
-  // Ảnh "gõ máy" và "máy hỏng" đã có bàn riêng → ẩn bàn + cốc vẽ sẵn trong lúc diễn.
-  const ownDesk = (on: boolean) => {
-    s.bossDesk.visible = !on;
-    s.coffee.cup.visible = !on;
-  };
-  const dur = run.durationMs;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      trip.move(p, 0, 0.14, 0.24, 0.38, SPOT.bossHome - 210, SPOT.floorY + 20);
-      trip.w.crouch(p > 0.14 && p < 0.24 ? 1 : 0);
-      if (p < 0.42 && hasClip('desk')) {
-        ownDesk(true);
-        pose(s, 'desk');
-        s.boss.setExpression(p < 0.24 ? null : 'shock');
-      } else if (p < 0.72) {
-        ownDesk(s.boss.hasSprites);
-        pose(s, 'computer');
-        s.boss.setExpression('shock');
-      } else if (p < 0.95) {
-        ownDesk(false);
-        pose(s, 'rage');
-        s.boss.setExpression('angry');
-      } else {
-        ownDesk(false);
-        resetBoss(s);
-      }
-      err.visible = p > 0.24 && p < 0.72 && Math.floor(ms / 200) % 2 === 0;
-      q.visible = p > 0.45 && p < 0.72;
-    },
-    finish() {
-      trip.done();
-      ownDesk(false);
-      err.destroy();
-      q.destroy();
-      resetBoss(s);
-    }
-  };
-};
+/** Dây câu căng: võng nhẹ + rung theo lực căng. */
+function drawLine(g: Graphics, a: { x: number; y: number }, b: { x: number; y: number }, tension: number, ms: number, lvl: number, width = 3): void {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const sag = 40 * (1 - tension);
+  const vib = tension * (3 + lvl * 0.8) * Math.sin(ms / 22);
+  g.moveTo(a.x, a.y);
+  const N = 10;
+  for (let i = 1; i <= N; i++) {
+    const t = i / N;
+    const env = Math.sin(t * Math.PI);
+    g.lineTo(a.x + dx * t + nx * vib * env, a.y + dy * t + ny * vib * env + sag * env);
+  }
+  g.stroke({ width, color: 0xffffff, alpha: 0.95 });
+}
 
-// ---------------------------------------------------------------------------
-// 8. Khách gọi phàn nàn — Sếp nghe máy, hét lên, ném tung tài liệu.
-// ---------------------------------------------------------------------------
-const complaintCall: AnimFactory = (s, run) => {
-  const ring = bubble('REENG REENG!', 0x3584e4, 36);
-  ring.anchor.set(0.5);
-  ring.position.set(SPOT.bossHome, 480);
-  const what = bubble('CÁI GÌ?!');
-  what.anchor.set(0.5);
-  what.position.set(SPOT.bossHome + 120, 500);
-  const docs = new Graphics();
-  s.fx.addChild(ring, what, docs);
-  s.classroom.cheer(run.actor?.displayName, 2000);
-  const dur = run.durationMs;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      ring.visible = p < 0.14 && Math.floor(ms / 150) % 2 === 0;
-      what.visible = p > 0.35 && p < 0.55;
-      if (p < 0.35) {
-        pose(s, 'phone');
-        s.boss.setExpression(p < 0.15 ? null : 'annoyed');
-      } else if (p < 0.55) {
-        pose(s, hasClip('phone') ? 'phone' : 'shouting');
-        s.boss.setExpression('angry');
-      } else if (p < 0.92) {
-        pose(s, hasClip('paper') ? 'paper' : 'throw_docs');
-        s.boss.setExpression('angry');
-      } else resetBoss(s);
-      docs.clear();
-      const f = seg(p, 0.55, 0.95);
-      if (f > 0 && f < 1 && !hasClip('paper'))
-        for (let i = 0; i < 6; i++) {
-          const k = clamp01(f * 1.3 - i * 0.05);
-          const x = SPOT.bossHome + 80 + k * (120 + i * 60);
-          const y = 560 - Math.sin(k * Math.PI) * (80 + i * 20) + k * 200;
-          docs.rect(x, y, 26, 32).fill(INK).rect(x + 3, y + 3, 20, 26).fill(0xffffff);
-        }
-    },
-    finish() {
-      ring.destroy();
-      what.destroy();
-      docs.destroy();
-      resetBoss(s);
-    }
-  };
-};
+const pull: AnimFactory = (s, run) => bigPull(s, run, tierFor(run));
 
-// ---------------------------------------------------------------------------
-// 9. Nịnh Sếp — Sếp khoái chí giơ ngón cái, tim bay lên (hồi lại chút bình tĩnh).
-// ---------------------------------------------------------------------------
-const praiseBoss: AnimFactory = (s, run) => {
-  const who = run.actor?.displayName ?? 'Cậu';
-  const say = bubble(`Khá lắm, ${[...who].slice(0, 12).join('')}!`, 0x26a269, 34);
-  say.anchor.set(0.5);
-  say.position.set(SPOT.bossHome, 470);
-  const hearts = new Graphics();
-  s.fx.addChild(hearts, say);
-  const flatter = bubble('Sếp đẹp trai quá ạ!', 0xff6b35, 30);
-  flatter.anchor.set(0.5);
-  s.fx.addChild(flatter);
-  // Người nịnh tự đi lên tận nơi khen Sếp.
-  const trip = makeTrip(s, run);
-  const dur = run.durationMs;
-  return {
-    update(ms) {
-      const p = clamp01(ms / dur);
-      trip.move(p, 0, 0.22, 0.62, 0.86, SPOT.bossHome + 170, SPOT.floorY + 30);
-      trip.w.pose(p >= 0.22 && p < 0.62 ? 'cheer' : null);
-      flatter.visible = p > 0.22 && p < 0.45;
-      flatter.position.set(trip.w.x, trip.w.y - 230);
-      pose(s, p > 0.3 && p < 0.92 ? 'pleased' : null);
-      s.boss.setExpression(p < 0.92 ? 'normal' : null);
-      say.visible = p > 0.45 && p < 0.85;
-      hearts.clear();
-      if (p < 0.3) return;
-      for (let i = 0; i < 5; i++) {
-        const k = (p * 2 + i / 5) % 1;
-        const x = SPOT.bossHome - 120 + i * 60;
-        const y = 640 - k * 200;
-        const a = 1 - k;
-        hearts.rect(x, y, 8, 8).fill({ color: 0xe01b24, alpha: a }).rect(x + 12, y, 8, 8).fill({ color: 0xe01b24, alpha: a });
-        hearts.rect(x - 4, y + 6, 28, 8).fill({ color: 0xe01b24, alpha: a }).rect(x + 4, y + 14, 12, 8).fill({ color: 0xe01b24, alpha: a });
-      }
-    },
-    finish() {
-      trip.done();
-      flatter.destroy();
-      hearts.destroy();
-      say.destroy();
-      resetBoss(s);
-    }
-  };
-};
-
-/** Hành động mới cấu hình thêm mà chưa có hoạt ảnh riêng: Sếp rung + hiện tên hành động. */
-const generic: AnimFactory = (s, run) => {
-  const t = bubble(run.actionName, 0x3d405b);
-  t.anchor.set(0.5);
-  t.position.set(SPOT.bossHome, 480);
-  s.fx.addChild(t);
-  s.classroom.cheer(run.actor?.displayName, 2000);
-  return {
-    update(ms) {
-      s.boss.shakeAmount = 3;
-      s.boss.setPose('shocked');
-      t.alpha = 1 - seg(ms / run.durationMs, 0.7, 1);
-    },
-    finish() {
-      t.destroy();
-      resetBoss(s);
-    }
-  };
-};
-
-export const ANIMATIONS: Record<string, AnimFactory> = {
-  throw_paper: throwPaper,
-  pluck_tree: pluckTree,
-  doodle_kpi: doodleKpi,
-  flat_tire: flatTire,
-  lock_toilet: lockToilet,
-  crash_pc: crashPc,
-  complaint_call: complaintCall,
-  praise_boss: praiseBoss,
-  blackout,
-  strike
-};
+export const ANIMATIONS: Record<string, AnimFactory> = Object.fromEntries(Object.keys(TIERS).map((id) => [id, pull]));
 
 /** Thời lượng mặc định (khớp cấu hình server) — dùng cho chế độ xem trước. */
 export const PREVIEW_DURATIONS: Record<string, number> = {
-  throw_paper: 3000,
-  pluck_tree: 7000,
-  doodle_kpi: 7000,
-  flat_tire: 9000,
-  lock_toilet: 8000,
-  crash_pc: 8000,
-  complaint_call: 6000,
-  praise_boss: 5000,
-  blackout: 8000,
-  strike: 9000
+  pull_carp: 5000,
+  pull_grass_carp: 6000,
+  pull_catfish: 7000,
+  pull_snakehead: 7000,
+  pull_giant_catfish: 8000,
+  pull_arowana: 9000,
+  pull_stingray: 10000,
+  pull_legend: 12000,
+  pull_koi: 5000,
+  big_fish_event: 8000,
+  grand_haul: 12000
 };
 
 export function createAnim(s: SceneRefs, run: RunningAction): ActionAnim {
-  return (ANIMATIONS[run.actionId] ?? generic)(s, run);
+  return (ANIMATIONS[run.actionId] ?? pull)(s, run);
 }

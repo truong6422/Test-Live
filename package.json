@@ -1,8 +1,8 @@
 {
-  "name": "sep-oi-em-xin-nghi",
+  "name": "di-cau-thoi",
   "private": true,
   "version": "0.1.0",
-  "description": "SẾP ƠI EM XIN NGHỈ! — trò chơi văn phòng tương tác với TikTok LIVE (overlay OBS + dashboard)",
+  "description": "ĐI CÂU THÔI! — trò chơi câu cá tương tác với TikTok LIVE (overlay OBS + dashboard)",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -18,11 +18,6 @@
     "test": "bun test",
     "typecheck": "bun run --cwd packages/shared typecheck && bun run --cwd apps/server typecheck && bun run --cwd apps/overlay typecheck && bun run --cwd apps/admin typecheck",
     "db:generate": "bun run --cwd apps/server db:generate",
-    "db:migrate": "bun run --cwd apps/server db:migrate",
-    "sprites:staff": "bun scripts/extract-staff-sprites.ts"
-  },
-  "devDependencies": {
-    "@types/pngjs": "^6.0.5",
-    "pngjs": "^7.0.0"
+    "db:migrate": "bun run --cwd apps/server db:migrate"
   }
 }

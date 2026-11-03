@@ -1,4 +1,7 @@
+# ĐI CÂU THÔI! — postgres + server + nginx.
 # Chạy toàn bộ hệ thống: cp .env.example .env  →  sửa .env  →  docker compose up -d --build
+# Tên project giữ từ bản văn phòng cũ ("Sếp ơi em xin nghỉ!"): Docker đặt tên volume theo tên project
+# (sep-oi-em-xin-nghi_pgdata), đổi tên sẽ tạo volume mới trống và "mất" dữ liệu cũ.
 name: sep-oi-em-xin-nghi
 
 services:
@@ -6,6 +9,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
+      # Mặc định "sep" (tên cũ) giữ nguyên để tương thích dữ liệu đã có.
       POSTGRES_USER: ${POSTGRES_USER:-sep}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Đặt POSTGRES_PASSWORD trong .env}
       POSTGRES_DB: ${POSTGRES_DB:-sep}

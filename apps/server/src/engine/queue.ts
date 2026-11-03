@@ -1,4 +1,4 @@
-import type { Lane } from '@sep/shared';
+import type { Lane } from '@cau/shared';
 
 export interface QueueItem<T = unknown> {
   actionId: string;
@@ -49,7 +49,7 @@ export class ActionQueue<T = unknown> {
   /**
    * Lấy mục tốt nhất có thể chạy với các lane đang bận.
    * Mục ưu tiên cao hơn mà đang bị chặn sẽ "giữ chỗ" lane của nó, để mục thấp hơn
-   * không chen vào làm nó chờ mãi (ví dụ Đình công cần mọi lane).
+   * không chen vào làm nó chờ mãi (ví dụ "Cả hồ kéo Cá Thần" cần mọi lane).
    */
   popRunnable(busy: ReadonlySet<Lane>): QueueItem<T> | null {
     const order = this.items
@@ -77,6 +77,11 @@ export class ActionQueue<T = unknown> {
       return true;
     });
     return expired;
+  }
+
+  /** Các mục đang chờ (bản sao, chỉ đọc). */
+  pending(): readonly QueueItem<T>[] {
+    return [...this.items];
   }
 
   clear(): void {

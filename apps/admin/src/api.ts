@@ -1,7 +1,7 @@
 import type {
   ActionConfig,
   ActionUpdate,
-  BossState,
+  FishingConfig,
   CollectiveConfig,
   ConnectorInfo,
   EventOutcome,
@@ -9,12 +9,14 @@ import type {
   GameSnapshot,
   GiftMapping,
   HistoryEntry,
+  LakeState,
   LeaderboardEntry,
+  SessionStats,
   WorkTask
-} from '@sep/shared';
+} from '@cau/shared';
 
-/** followersOnly: server lưu vào action.trigger.followersOnly (có thể chưa có trong schema shared). */
-export type ActionPatch = ActionUpdate & { followersOnly?: boolean };
+/** Bản vá gửi lên PUT /api/actions/:id (khớp actionUpdateSchema). */
+export type ActionPatch = ActionUpdate;
 
 export class ApiError extends Error {
   constructor(
@@ -53,8 +55,8 @@ export const api = {
   trigger: (id: string) => call<{ outcome: EventOutcome }>('POST', `/actions/${encodeURIComponent(id)}/trigger`),
   updateGifts: (gifts: GiftMapping[]) => call<GiftMapping[]>('PUT', '/gifts', gifts),
   updateWork: (tasks: WorkTask[]) => call<WorkTask[]>('PUT', '/work', tasks),
+  updateFishing: (patch: Partial<FishingConfig>) => call<FishingConfig>('PUT', '/fishing', patch),
   updateCollective: (patch: Partial<CollectiveConfig>) => call<CollectiveConfig>('PUT', '/collective', patch),
-  setCalm: (calm: number) => call<BossState>('POST', '/boss', { calm }),
   history: (q: { limit?: number; outcome?: string; session?: 'current' | 'all' }) => {
     const p = new URLSearchParams();
     if (q.limit) p.set('limit', String(q.limit));
@@ -62,5 +64,15 @@ export const api = {
     if (q.session) p.set('session', q.session);
     return call<HistoryEntry[]>('GET', `/history?${p}`);
   },
-  leaderboard: (scope: 'session' | 'total') => call<LeaderboardEntry[]>('GET', `/leaderboard?scope=${scope}`)
+  leaderboard: (scope: 'session' | 'total') => call<LeaderboardEntry[]>('GET', `/leaderboard?scope=${scope}`),
+  /** Đường dẫn overlay có OVERLAY_KEY (chỉ admin đã đăng nhập mới lấy được). */
+  overlayUrl: () => call<{ path: string }>('GET', '/overlay-url'),
+  lake: () => call<LakeState>('GET', '/lake'),
+  kick: (platformId: string) => call<LakeState>('POST', '/lake/kick', { platformId }),
+  bigFishNow: () => call<{ result: 'started' | 'postponed'; nextBigFishAt: number }>('POST', '/bigfish/now'),
+  stats: () => call<SessionStats>('GET', '/stats'),
+  blocklist: () => call<string[]>('GET', '/blocklist'),
+  updateBlocklist: (words: string[]) => call<string[]>('PUT', '/blocklist', words),
+  testBlocklist: (text: string, words?: string[]) =>
+    call<{ comment: string; displayName: string }>('POST', '/blocklist/test', { text, words })
 };

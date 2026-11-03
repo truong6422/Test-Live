@@ -1,20 +1,31 @@
 import { useState } from 'react';
-import type { ActionConfig, GameConfig } from '@sep/shared';
+import type { ActionConfig, GameConfig, Lane } from '@cau/shared';
 import { api, type ActionPatch } from '../api';
 import type { Run } from '../App';
+import { FishThumb } from '../components/FishSprite';
+
+const LANE_LABELS: Record<Lane, string> = {
+  king: 'Cá Thần',
+  lake: 'Mặt hồ',
+  dock: 'Bến câu',
+  sky: 'Bầu trời',
+  underwater: 'Đáy hồ',
+  anglers: 'Cần thủ'
+};
 
 export function ActionsPage({ config, run, reloadConfig }: { config: GameConfig; run: Run; reloadConfig: () => Promise<void> }) {
   return (
     <div className="stack">
       <h1>Hành động</h1>
       <p className="muted">
-        Trêu Sếp <b>chỉ bằng quà tặng</b>: mỗi hành động được kích hoạt theo giá trị quà (kim cương) ở trang <b>Mapping quà</b>. Mặc định
-        hành động không có từ khoá bình luận — bình luận dành cho Công việc miễn phí và góp sức Đình công. Quà tặng không bị chặn bởi
-        cooldown nhưng vẫn xếp hàng đợi. Lane: hai hành động dùng chung lane không chạy cùng lúc.
+        <b>Kéo cá to bằng quà tặng</b>: mỗi hành động được kích hoạt theo giá trị quà (kim cương) ở trang <b>Quà tặng</b>; người tặng kéo
+        ngay một con <b>cá to</b> (loài + khoảng cân bên dưới; server bốc cân rồi cộng kg cho người đó). Hành động cho cá to định kỳ chọn ở
+        tab <b>Câu cá</b>. Quà tặng không bị chặn bởi cooldown nhưng vẫn xếp hàng đợi. Lane: hai hành động dùng chung lane không chạy cùng
+        lúc. <b>Tác động Cá Thần</b> (bình thản / sức bền) server vẫn tính nhưng không còn hiện trên HUD.
       </p>
       <p className="muted">
         Nếu muốn bật lại kích hoạt bằng bình luận cho một hành động: điền từ khoá (so khớp không dấu, theo nguyên từ). <b>Chỉ người đã
-        follow:</b> bật thì chỉ nhân viên chính thức (đã follow) mới kích hoạt được bằng bình luận; quà luôn kích hoạt được.
+        follow:</b> bật thì chỉ cần thủ chính thức (đã follow) mới kích hoạt được bằng bình luận; quà luôn kích hoạt được.
       </p>
       {config.actions.map((a) => (
         <ActionCard key={a.id} action={a} run={run} reloadConfig={reloadConfig} />
@@ -26,7 +37,7 @@ export function ActionsPage({ config, run, reloadConfig }: { config: GameConfig;
 function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: Run; reloadConfig: () => Promise<void> }) {
   const [form, setForm] = useState(() => toForm(action));
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
-  const num = (k: 'durationMs' | 'cooldownMs' | 'userCooldownMs' | 'priority' | 'points' | 'bossCalm' | 'bossStamina', label: string) => (
+  const num = (k: 'durationMs' | 'cooldownMs' | 'userCooldownMs' | 'priority' | 'points' | 'kingCalm' | 'kingStamina', label: string) => (
     <label>
       {label}
       <input type="number" value={form[k]} onChange={(e) => set(k, Number(e.target.value))} />
@@ -34,6 +45,16 @@ function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: 
   );
 
   const save = () => {
+    const fishErr = !form.hasFish
+      ? null
+      : form.fishEmoji.length < 1 || form.fishEmoji.length > 8
+        ? 'emoji cá 1-8 ký tự'
+        : form.fishName.trim().length < 1 || form.fishName.length > 40
+          ? 'tên cá 1-40 ký tự'
+          : !(form.fishMinKg >= 0 && form.fishMaxKg >= form.fishMinKg && form.fishMaxKg <= 10_000)
+            ? 'cân cá phải 0 ≤ kg từ ≤ kg đến ≤ 10000'
+            : null;
+    if (fishErr) return run(() => Promise.reject(new Error(`${action.name}: ${fishErr}`)));
     const keywords = form.keywords
       .split(',')
       .map((s) => s.trim())
@@ -51,8 +72,9 @@ function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: 
       userCooldownMs: form.userCooldownMs,
       priority: form.priority,
       points: form.points,
-      bossCalm: form.bossCalm,
-      bossStamina: form.bossStamina
+      kingCalm: form.kingCalm,
+      kingStamina: form.kingStamina,
+      fish: form.hasFish ? { emoji: form.fishEmoji, name: form.fishName.trim(), minKg: form.fishMinKg, maxKg: form.fishMaxKg } : null
     };
     return run(() => api.updateAction(action.id, patch).then(reloadConfig), `Đã lưu "${form.name}"`);
   };
@@ -60,8 +82,14 @@ function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: 
   return (
     <section className="card">
       <div className="row">
-        <h2 style={{ flex: 1 }}>
+        {action.fish && <FishThumb actionId={action.id} name={action.fish.name} emoji={action.fish.emoji} size={56} />}
+        <h2 style={{ flex: 1, margin: 0 }}>
           {action.name} <code className="muted">{action.id}</code>
+          {action.fish && (
+            <div className="muted fish-sub">
+              {action.fish.name} · {action.fish.minKg}–{action.fish.maxKg} kg
+            </div>
+          )}
         </h2>
         <label className="inline">
           <input
@@ -90,16 +118,44 @@ function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: 
         {num('userCooldownMs', 'Hồi chiêu mỗi người (ms)')}
         {num('priority', 'Ưu tiên')}
         {num('points', 'Điểm cộng')}
-        {num('bossCalm', 'Đổi bình tĩnh Sếp')}
-        {num('bossStamina', 'Đổi sức chịu đựng')}
+        {num('kingCalm', 'Tác động Cá Thần: bình thản')}
+        {num('kingStamina', 'Tác động Cá Thần: sức bền')}
         <label className="inline">
           <input type="checkbox" checked={form.followersOnly} onChange={(e) => set('followersOnly', e.target.checked)} />
           Chỉ người đã follow (bình luận)
         </label>
         <label>
           Lane
-          <input value={action.lanes.join(', ')} disabled />
+          <input value={action.lanes.map((l) => LANE_LABELS[l] ?? l).join(', ')} disabled />
         </label>
+      </div>
+      <div className="loot">
+        <label className="inline">
+          <input type="checkbox" checked={form.hasFish} onChange={(e) => set('hasFish', e.target.checked)} />
+          <b>Kéo được cá to</b>
+        </label>
+        {form.hasFish ? (
+          <div className="form-grid">
+            <label>
+              Emoji
+              <input value={form.fishEmoji} maxLength={8} onChange={(e) => set('fishEmoji', e.target.value)} />
+            </label>
+            <label>
+              Tên loài cá
+              <input value={form.fishName} maxLength={40} onChange={(e) => set('fishName', e.target.value)} />
+            </label>
+            <label>
+              Kg từ
+              <input type="number" min={0} step={0.5} value={form.fishMinKg} onChange={(e) => set('fishMinKg', Number(e.target.value))} />
+            </label>
+            <label>
+              Kg đến
+              <input type="number" min={0} step={0.5} value={form.fishMaxKg} onChange={(e) => set('fishMaxKg', Number(e.target.value))} />
+            </label>
+          </div>
+        ) : (
+          <span className="muted">Hành động này không kéo cá (chỉ diễn hoạt ảnh).</span>
+        )}
       </div>
       <div className="row">
         <button className="primary" onClick={save}>
@@ -124,7 +180,12 @@ function toForm(a: ActionConfig) {
     userCooldownMs: a.userCooldownMs,
     priority: a.priority,
     points: a.points,
-    bossCalm: a.bossEffect.calm,
-    bossStamina: a.bossEffect.stamina
+    kingCalm: a.kingEffect.calm,
+    kingStamina: a.kingEffect.stamina,
+    hasFish: !!a.fish,
+    fishEmoji: a.fish?.emoji ?? '🐟',
+    fishName: a.fish?.name ?? 'Cá to',
+    fishMinKg: a.fish?.minKg ?? 3,
+    fishMaxKg: a.fish?.maxKg ?? 6
   };
 }

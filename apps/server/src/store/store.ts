@@ -1,4 +1,4 @@
-import type { CollectiveState, EventOutcome, GameConfig, HistoryEntry } from '@sep/shared';
+import type { CollectiveState, EventOutcome, GameConfig, HistoryEntry } from '@cau/shared';
 import type { PlayerRecord, SessionStat } from '../players/players';
 
 export interface HistoryQuery {

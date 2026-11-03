@@ -2,17 +2,19 @@ import type {
   ActionUpdate,
   CollectiveConfig,
   ConnectorInfo,
+  FishingConfig,
   GameConfig,
   GiftMapping,
   HistoryEntry,
   ServerMessage,
   WorkTask
-} from '@sep/shared';
+} from '@cau/shared';
 import { DemoConnector } from './connectors/demo/demo-connector';
 import type { ConnectorState, LiveConnector } from './connectors/types';
 import type { Clock } from './engine/clock';
 import { GameEngine } from './engine/engine';
 import type { Logger } from './logger';
+import { cleanComment, cleanDisplayName, normalizeBlocklist, setBlocklist, toBlockSet } from './normalizer/sanitize';
 import { computeTitle } from './players/players';
 import type { GameStore, HistoryQuery } from './store/store';
 
@@ -34,6 +36,8 @@ export interface ServiceDeps {
 }
 
 const HISTORY_BUFFER_MAX = 5000;
+/** Trạng thái TikTok coi như đang LIVE thật — không được bật demo. */
+const LIVE_STATUSES: ReadonlySet<ConnectorState['status']> = new Set(['connected', 'connecting', 'reconnecting']);
 
 /**
  * Nối Game Engine với lưu trữ, connector và client. Mọi thao tác admin đi qua đây.
@@ -59,6 +63,7 @@ export class GameService {
     this.demo = deps.demo ?? new DemoConnector();
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.config = config;
+    setBlocklist(config.blocklist ?? []);
     this.engine = new GameEngine({ clock: deps.clock, config, newId: this.newId });
 
     this.engine.subscribe((msg) => {
@@ -118,7 +123,7 @@ export class GameService {
     await this.store.close();
   }
 
-  /** Ghi lịch sử, nhân viên và sự kiện tập thể xuống DB theo lô. */
+  /** Ghi lịch sử, cần thủ và sự kiện tập thể xuống DB theo lô. */
   async flush(): Promise<void> {
     if (this.flushing) return;
     this.flushing = true;
@@ -195,8 +200,10 @@ export class GameService {
     if (patch.userCooldownMs !== undefined) a.userCooldownMs = patch.userCooldownMs;
     if (patch.priority !== undefined) a.priority = patch.priority;
     if (patch.points !== undefined) a.points = patch.points;
-    if (patch.bossCalm !== undefined) a.bossEffect.calm = patch.bossCalm;
-    if (patch.bossStamina !== undefined) a.bossEffect.stamina = patch.bossStamina;
+    if (patch.kingCalm !== undefined) a.kingEffect.calm = patch.kingCalm;
+    if (patch.kingStamina !== undefined) a.kingEffect.stamina = patch.kingStamina;
+    if (patch.fish === null) delete a.fish;
+    else if (patch.fish !== undefined) a.fish = patch.fish;
     if (patch.followersOnly !== undefined) a.trigger.followersOnly = patch.followersOnly;
     await this.applyConfig(cfg);
   }
@@ -221,22 +228,74 @@ export class GameService {
     await this.applyConfig(cfg);
   }
 
+  async updateFishing(patch: Partial<FishingConfig>): Promise<void> {
+    const cfg = this.getConfig();
+    const next = { ...cfg.fishing, ...patch };
+    if (!cfg.actions.some((a) => a.id === next.bigFishActionId)) {
+      throw new ValidationError(`Hành động không tồn tại: ${next.bigFishActionId}`);
+    }
+    const bad = next.loot.find((l) => l.minKg > l.maxKg);
+    if (bad) throw new ValidationError(`Cân tối thiểu lớn hơn tối đa: ${bad.name}`);
+    if (!next.loot.some((l) => l.weight > 0)) throw new ValidationError('Bảng cá cần ít nhất một loại có trọng số > 0');
+    cfg.fishing = next;
+    await this.applyConfig(cfg);
+  }
+
   async updateCollective(patch: Partial<CollectiveConfig>): Promise<void> {
     const cfg = this.getConfig();
     cfg.collective = { ...cfg.collective, ...patch };
     await this.applyConfig(cfg);
   }
 
+  /** Lưu bộ lọc từ (đã chuẩn hoá: chữ thường, NFC, bỏ trùng). Áp dụng ngay cho bình luận / tên mới. */
+  async updateBlocklist(words: string[]): Promise<string[]> {
+    const cfg = this.getConfig();
+    cfg.blocklist = normalizeBlocklist(words);
+    await this.applyConfig(cfg);
+    return cfg.blocklist;
+  }
+
+  /** Thử bộ lọc: kết quả hiển thị nếu `text` là bình luận / tên người xem (mặc định dùng danh sách đang lưu). */
+  testBlocklist(text: string, words?: string[]): { comment: string; displayName: string } {
+    const set = toBlockSet(words ?? this.config.blocklist ?? []);
+    return { comment: cleanComment(text, set), displayName: cleanDisplayName(text, '(trống)', set) };
+  }
+
   private async applyConfig(cfg: GameConfig): Promise<void> {
     await this.store.saveConfig(cfg);
     this.config = cfg;
+    setBlocklist(cfg.blocklist ?? []);
     this.engine.updateConfig(cfg);
+  }
+
+  // --------------------------------------------------------------------------
+  // Hồ câu
+  // --------------------------------------------------------------------------
+  /** Mời một người rời hồ (NotFoundError nếu người đó không đang ngồi). */
+  kickFromLake(platformId: string): void {
+    if (!this.engine.kick(platformId)) throw new NotFoundError('Người này không đang ngồi trong hồ');
+    this.log.info('Admin mời rời hồ', { platformId });
+  }
+
+  /** Cá to định kỳ xuất hiện ngay. Trả về 'started' hoặc 'postponed' (đang kéo cá quà, chạy ngay sau). */
+  bigFishNow(): 'started' | 'postponed' {
+    const r = this.engine.triggerBigFishNow();
+    if (r === 'not_running') throw new ConflictError('Game đang dừng — bấm "Bắt đầu game" trước');
+    if (r === 'empty') throw new ConflictError('Hồ chưa có ai ngồi câu');
+    if (r === 'disabled') throw new ConflictError('Hành động cá to định kỳ đang tắt hoặc không tồn tại (xem tab Câu cá)');
+    return r;
   }
 
   // --------------------------------------------------------------------------
   // Kết nối
   // --------------------------------------------------------------------------
+  /** Kết nối TikTok LIVE thật. Đang chạy demo thì tắt demo trước (không trộn sự kiện giả với LIVE thật). */
   async connectTikTok(username: string): Promise<void> {
+    if (this.demo.running) {
+      this.demo.stop();
+      this.log.info('Tắt demo trước khi kết nối TikTok');
+      this.pushConnectors();
+    }
     await this.tiktok.connect(username);
   }
 
@@ -244,7 +303,11 @@ export class GameService {
     await this.tiktok.disconnect();
   }
 
+  /** Bật/tắt demo. Không cho bật khi đang kết nối / đã kết nối TikTok LIVE thật (ConflictError → HTTP 409). */
   setDemo(running: boolean): void {
+    if (running && LIVE_STATUSES.has(this.tiktok.state().status)) {
+      throw new ConflictError('Đang kết nối TikTok LIVE thật — ngắt kết nối TikTok trước khi bật chế độ demo');
+    }
     if (running) this.demo.start();
     else this.demo.stop();
     this.pushConnectors();
@@ -274,3 +337,4 @@ export class GameService {
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
+export class ConflictError extends Error {}

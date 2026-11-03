@@ -1,5 +1,5 @@
-import type { CollectiveState, GameConfig, HistoryEntry } from '@sep/shared';
-import { reconcileConfig } from '../config/defaults';
+import type { CollectiveState, GameConfig, HistoryEntry } from '@cau/shared';
+import { defaultGameConfig, reconcileConfig } from '../config/defaults';
 import type { PlayerRecord } from '../players/players';
 import type { GameStore, HistoryQuery } from './store';
 
@@ -16,12 +16,14 @@ export class MemoryStore implements GameStore {
       this.config = structuredClone(defaults);
       return;
     }
-    // Giống PgStore: đồng bộ danh sách hành động với code, chuyển mapping quà, ép chạy nối tiếp.
+    // Giống PgStore: nâng cấp bản cũ, đồng bộ danh sách hành động với code, chuyển mapping quà, ép chạy nối tiếp.
     this.config = reconcileConfig(structuredClone(this.config), defaults).config;
   }
   async loadConfig(): Promise<GameConfig> {
     const cfg = structuredClone(this.config!);
     cfg.work ??= [];
+    cfg.fishing ??= structuredClone(defaultGameConfig().fishing);
+    cfg.blocklist ??= defaultGameConfig().blocklist;
     return cfg;
   }
   async saveConfig(cfg: GameConfig): Promise<void> {

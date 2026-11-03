@@ -5,23 +5,27 @@ import path from 'node:path';
 import { z } from 'zod';
 import {
   actionUpdateSchema,
-  bossAdjustSchema,
+  blocklistSchema,
+  blocklistTestSchema,
   collectiveUpdateSchema,
+  fishingUpdateSchema,
   giftMappingsSchema,
   liveConnectSchema,
+  kingAdjustSchema,
+  lakeKickSchema,
   loginSchema,
   manualTriggerSchema,
   workTasksSchema
-} from '@sep/shared';
+} from '@cau/shared';
 import type { Env } from '../config/env';
 import { TokenBucket } from '../engine/rate-limit';
 import type { Logger } from '../logger';
-import { NotFoundError, ValidationError, type GameService } from '../service';
+import { ConflictError, NotFoundError, ValidationError, type GameService } from '../service';
 import { safeEqual, SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySession } from './auth';
 
 export interface AppDeps {
   service: GameService;
-  env: Pick<Env, 'ADMIN_PASSWORD' | 'SESSION_SECRET' | 'COOKIE_SECURE' | 'STATIC_DIR'>;
+  env: Pick<Env, 'ADMIN_PASSWORD' | 'SESSION_SECRET' | 'COOKIE_SECURE' | 'STATIC_DIR' | 'OVERLAY_KEY'>;
   logger: Logger;
 }
 
@@ -40,6 +44,7 @@ export function createApp({ service, env, logger }: AppDeps): Hono {
   app.onError((err, c) => {
     if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
     if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
+    if (err instanceof ConflictError) return c.json({ error: err.message }, 409);
     if (err instanceof z.ZodError) return c.json({ error: 'Dữ liệu không hợp lệ', issues: err.issues }, 400);
     log.error('Lỗi xử lý request', { err, path: c.req.path });
     return c.json({ error: err.message || 'Lỗi máy chủ' }, 500);
@@ -155,7 +160,14 @@ export function createApp({ service, env, logger }: AppDeps): Hono {
     return c.json(service.getConfig().gifts);
   });
 
-  // Công việc (tương tác miễn phí)
+  // Câu tự động (chu kỳ, bảng cá, cá to định kỳ, ghế chiếu giữa, rời hồ)
+  api.get('/fishing', (c) => c.json(service.getConfig().fishing));
+  api.put('/fishing', async (c) => {
+    await service.updateFishing(fishingUpdateSchema.parse(await c.req.json()));
+    return c.json(service.getConfig().fishing);
+  });
+
+  // Việc vui bằng bình luận (tương tác miễn phí)
   api.put('/work', async (c) => {
     await service.updateWork(workTasksSchema.parse(await c.req.json()));
     return c.json(service.getConfig().work);
@@ -167,11 +179,40 @@ export function createApp({ service, env, logger }: AppDeps): Hono {
     return c.json(service.getConfig().collective);
   });
 
-  // Sếp
-  api.post('/boss', async (c) => {
-    const { calm } = bossAdjustSchema.parse(await c.req.json());
-    service.engine.setBossCalm(calm);
-    return c.json(service.engine.snapshot().boss);
+  // Cá Thần
+  api.post('/king', async (c) => {
+    const { calm } = kingAdjustSchema.parse(await c.req.json());
+    service.engine.setKingCalm(calm);
+    return c.json(service.engine.snapshot().king);
+  });
+
+  // Overlay: đường dẫn có OVERLAY_KEY cho khung xem trước / OBS — CHỈ trả cho admin đã đăng nhập.
+  api.get('/overlay-url', (c) => {
+    c.header('Cache-Control', 'no-store');
+    return c.json({ path: `/overlay/?key=${encodeURIComponent(env.OVERLAY_KEY)}` });
+  });
+
+  // Hồ câu: người đang ngồi, mời rời hồ, gọi cá to ngay
+  api.get('/lake', (c) => c.json(service.engine.lakeState()));
+  api.post('/lake/kick', async (c) => {
+    const { platformId } = lakeKickSchema.parse(await c.req.json());
+    service.kickFromLake(platformId);
+    return c.json(service.engine.lakeState());
+  });
+  api.post('/bigfish/now', (c) => {
+    const result = service.bigFishNow();
+    return c.json({ result, nextBigFishAt: service.engine.snapshot().nextBigFishAt });
+  });
+
+  // Thống kê phiên
+  api.get('/stats', (c) => c.json(service.engine.sessionStats()));
+
+  // Bộ lọc từ (che từ tục trong tên / bình luận)
+  api.get('/blocklist', (c) => c.json(service.getConfig().blocklist));
+  api.put('/blocklist', async (c) => c.json(await service.updateBlocklist(blocklistSchema.parse(await c.req.json()))));
+  api.post('/blocklist/test', async (c) => {
+    const { text, words } = blocklistTestSchema.parse(await c.req.json());
+    return c.json(service.testBlocklist(text, words));
   });
 
   // Lịch sử & bảng xếp hạng
@@ -188,9 +229,11 @@ export function createApp({ service, env, logger }: AppDeps): Hono {
     const sessionId = q.session === 'current' ? (service.engine.currentSessionId ?? undefined) : undefined;
     return c.json(await service.listHistory({ limit: q.limit, outcome: q.outcome, sessionId }));
   });
+  // TOP QUÀ TẶNG (mặc định) hoặc BẢNG CÂN CÁ (?board=kg); ?scope=total cho toàn thời gian.
   api.get('/leaderboard', (c) => {
     const scope = c.req.query('scope') === 'total' ? 'total' : 'session';
-    return c.json(service.engine.players.leaderboard(scope, 50));
+    const players = service.engine.players;
+    return c.json(c.req.query('board') === 'kg' ? players.kgBoard(scope, 50) : players.leaderboard(scope, 50));
   });
 
   app.route('/api', api);

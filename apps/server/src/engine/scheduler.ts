@@ -1,4 +1,4 @@
-import type { Lane, RunningAction } from '@sep/shared';
+import type { Lane, RunningAction } from '@cau/shared';
 
 /**
  * Điều phối hoạt ảnh phía server: theo dõi hoạt ảnh đang chạy, khoá lane, giới hạn số chạy cùng lúc

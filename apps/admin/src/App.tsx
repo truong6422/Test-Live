@@ -1,22 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { GameConfig } from '@sep/shared';
+import type { GameConfig } from '@cau/shared';
 import { api, ApiError } from './api';
 import { ActionsPage } from './pages/Actions';
+import { BlocklistPage } from './pages/Blocklist';
 import { DashboardPage } from './pages/Dashboard';
+import { FishingPage } from './pages/Fishing';
 import { GiftsPage } from './pages/Gifts';
 import { HistoryPage } from './pages/History';
 import { PlayersPage } from './pages/Players';
 import { WorkPage } from './pages/Work';
 import { useLive } from './useLive';
 
-type Tab = 'dashboard' | 'actions' | 'gifts' | 'work' | 'history' | 'players';
+type Tab = 'dashboard' | 'actions' | 'gifts' | 'fishing' | 'work' | 'blocklist' | 'history' | 'players';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'dashboard', label: 'Điều khiển' },
   { id: 'actions', label: 'Hành động' },
   { id: 'gifts', label: 'Quà tặng' },
-  { id: 'work', label: 'Công việc' },
+  { id: 'fishing', label: 'Câu cá' },
+  { id: 'work', label: 'Việc câu' },
+  { id: 'blocklist', label: 'Bộ lọc từ' },
   { id: 'history', label: 'Lịch sử' },
-  { id: 'players', label: 'Nhân viên' }
+  { id: 'players', label: 'Cần thủ' }
 ];
 
 export type Notify = (msg: string, kind?: 'ok' | 'error') => void;
@@ -68,9 +72,9 @@ export function App() {
     <div className="layout">
       <aside>
         <div className="brand">
-          SẾP ƠI
+          🎣 ĐI CÂU
           <br />
-          EM XIN NGHỈ!
+          THÔI!
         </div>
         <nav>
           {TABS.map((t) => (
@@ -90,13 +94,17 @@ export function App() {
         {!live.snap || !config ? (
           <div className="center">Đang tải…</div>
         ) : tab === 'dashboard' ? (
-          <DashboardPage snap={live.snap} config={config} run={run} reloadConfig={reloadConfig} />
+          <DashboardPage snap={live.snap} catches={live.catches} config={config} run={run} notify={notify} reloadConfig={reloadConfig} />
         ) : tab === 'actions' ? (
           <ActionsPage config={config} run={run} reloadConfig={reloadConfig} />
         ) : tab === 'gifts' ? (
           <GiftsPage config={config} run={run} reloadConfig={reloadConfig} liveHistory={live.history} />
+        ) : tab === 'fishing' ? (
+          <FishingPage config={config} run={run} notify={notify} reloadConfig={reloadConfig} />
         ) : tab === 'work' ? (
           <WorkPage config={config} run={run} notify={notify} reloadConfig={reloadConfig} />
+        ) : tab === 'blocklist' ? (
+          <BlocklistPage config={config} run={run} reloadConfig={reloadConfig} />
         ) : tab === 'history' ? (
           <HistoryPage run={run} live={live.history} />
         ) : (
@@ -130,7 +138,7 @@ function Login({ onDone }: { onDone: () => void }) {
           }
         }}
       >
-        <h1>Quản trị trò chơi</h1>
+        <h1>🎣 ĐI CÂU THÔI! — Quản trị</h1>
         <label>
           Mật khẩu
           <input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} />

@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import type { GameSnapshot, HistoryEntry, ServerMessage } from '@sep/shared';
+import type { CatchEvent, GameSnapshot, HistoryEntry, ServerMessage } from '@cau/shared';
+
+const CATCHES_MAX = 40;
 
 /** Trạng thái realtime qua /ws/admin (xác thực bằng cookie phiên). */
 export function useLive(enabled: boolean) {
   const [snap, setSnap] = useState<GameSnapshot | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  /** Cá vừa lên gần đây (mới nhất trước) — từ tin 'catches' mỗi chu kỳ. */
+  const [catches, setCatches] = useState<CatchEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const retry = useRef(0);
 
@@ -31,6 +35,7 @@ export function useLive(enabled: boolean) {
         const msg = JSON.parse(ev.data as string) as ServerMessage;
         if (msg.type === 'snapshot') return setSnap(msg.data);
         if (msg.type === 'history') return setHistory((h) => [msg.data, ...h].slice(0, 200));
+        if (msg.type === 'catches') return setCatches((c) => [...msg.data].reverse().concat(c).slice(0, CATCHES_MAX));
         setSnap((s) => (s ? apply(s, msg) : s));
       };
     };
@@ -42,7 +47,7 @@ export function useLive(enabled: boolean) {
     };
   }, [enabled]);
 
-  return { snap, history, connected };
+  return { snap, history, catches, connected };
 }
 
 function apply(s: GameSnapshot, msg: ServerMessage): GameSnapshot {
@@ -51,12 +56,14 @@ function apply(s: GameSnapshot, msg: ServerMessage): GameSnapshot {
       return { ...s, runningActions: [...s.runningActions.filter((r) => r.runId !== msg.data.runId), msg.data] };
     case 'action.ended':
       return { ...s, runningActions: s.runningActions.filter((r) => r.runId !== msg.data.runId) };
-    case 'boss':
-      return { ...s, boss: msg.data };
+    case 'king':
+      return { ...s, king: msg.data };
     case 'feed':
       return { ...s, feed: msg.data };
     case 'leaderboard':
-      return { ...s, leaderboard: msg.data.entries, participants: msg.data.participants };
+      return { ...s, leaderboard: msg.data.entries, kgBoard: msg.data.kgBoard, participants: msg.data.participants };
+    case 'bigfish.next':
+      return { ...s, nextBigFishAt: msg.data.at, bigFishShadowMs: msg.data.shadowMs };
     case 'roster':
       return { ...s, roster: msg.data };
     case 'collective':

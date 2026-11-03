@@ -1,5 +1,5 @@
 {
-  "name": "@sep/overlay",
+  "name": "@cau/overlay",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@sep/shared": "workspace:*",
+    "@cau/shared": "workspace:*",
     "pixi.js": "^8.6.6"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 {
-  "name": "@sep/server",
+  "name": "@cau/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "db:migrate": "bun src/db/migrate.ts"
   },
   "dependencies": {
-    "@sep/shared": "workspace:*",
+    "@cau/shared": "workspace:*",
     "drizzle-orm": "^0.38.3",
     "hono": "^4.6.16",
     "postgres": "^3.4.5",

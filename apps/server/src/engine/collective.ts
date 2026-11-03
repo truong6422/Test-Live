@@ -1,9 +1,9 @@
-import type { CollectiveConfig, CollectiveState } from '@sep/shared';
+import type { CollectiveConfig, CollectiveState } from '@cau/shared';
 
 export type CollectiveTick = { kind: 'expired'; state: CollectiveState } | { kind: 'started'; state: CollectiveState } | null;
 
 /**
- * Sự kiện tập thể (MVP: một nhiệm vụ lặp lại, ví dụ "Đình công toàn công ty").
+ * Sự kiện tập thể (MVP: một nhiệm vụ lặp lại, ví dụ "Cả hồ kéo Cá Thần").
  * Mỗi lượt tham gia hợp lệ cộng 1 vào tiến trình. Đủ mục tiêu -> completed,
  * nghỉ restartDelayMs rồi mở vòng mới.
  */

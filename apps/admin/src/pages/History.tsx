@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { HistoryEntry } from '@sep/shared';
+import type { HistoryEntry } from '@cau/shared';
 import { api } from '../api';
 import type { Run } from '../App';
 
@@ -14,7 +14,7 @@ const OUTCOMES: Record<string, string> = {
   expired: 'Chờ quá lâu',
   game_stopped: 'Game dừng',
   filtered: 'Bị chặn',
-  work: 'Làm việc'
+  work: 'Việc câu'
 };
 
 export function HistoryPage({ run, live }: { run: Run; live: HistoryEntry[] }) {

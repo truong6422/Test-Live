@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
-import { MOOD_LABELS, type GameConfig, type GameSnapshot } from '@sep/shared';
+import type { CatchEvent, GameConfig, GameSnapshot, LeaderboardEntry } from '@cau/shared';
 import { api } from '../api';
-import type { Run } from '../App';
+import type { Notify, Run } from '../App';
+import { FishThumb } from '../components/FishSprite';
+import { GoLiveChecklist } from '../components/GoLiveChecklist';
+import { fmtKg, LakeCard } from '../components/LakeCard';
+import { LivePreview } from '../components/LivePreview';
+import { SessionStatsCard } from '../components/SessionStatsCard';
 
 const STATUS_LABEL: Record<string, string> = {
   disconnected: 'Chưa kết nối',
@@ -12,22 +17,32 @@ const STATUS_LABEL: Record<string, string> = {
   error: 'Lỗi (tự thử lại)'
 };
 
+const COLLECTIVE_STATUS: Record<string, string> = {
+  active: 'Đang diễn ra',
+  completed: 'Đã kéo được!',
+  expired: 'Hết giờ',
+  idle: 'Chờ vòng mới'
+};
+
 export function DashboardPage({
   snap,
+  catches,
   config,
   run,
+  notify,
   reloadConfig
 }: {
   snap: GameSnapshot;
+  catches: CatchEvent[];
   config: GameConfig;
   run: Run;
+  notify: Notify;
   reloadConfig: () => Promise<void>;
 }) {
   const t = snap.connectors.tiktok;
   const [username, setUsername] = useState(t.username ?? '');
-  const [calm, setCalm] = useState(Math.round(snap.boss.calm));
+  const now = useServerNow(snap.serverTime);
   const [goal, setGoal] = useState(config.collective.goal);
-  const overlayUrl = `${location.origin}/overlay/?key=<OVERLAY_KEY>`;
 
   useEffect(() => setGoal(config.collective.goal), [config.collective.goal]);
 
@@ -69,9 +84,6 @@ export function DashboardPage({
             <dd>{t.viewerCount}</dd>
           </div>
         </dl>
-        <p className="muted">
-          Overlay OBS: <code>{overlayUrl}</code> (Browser Source 1080×1920)
-        </p>
       </section>
 
       <section className="card">
@@ -106,21 +118,44 @@ export function DashboardPage({
             {snap.connectors.demo.running ? 'Tắt demo' : 'Bật demo'}
           </button>
         </div>
-        <p className="muted">Demo sinh sự kiện giả lập (gắn nhãn DEMO trên overlay, không lưu vào bảng nhân viên).</p>
+        <p className="muted">Demo sinh sự kiện giả lập (gắn nhãn DEMO trên overlay, không lưu vào bảng cần thủ).</p>
+      </section>
+
+      <GoLiveChecklist snap={snap} />
+
+      <LivePreview run={run} notify={notify} />
+
+      <LakeCard snap={snap} config={config} run={run} notify={notify} now={now} />
+
+      <SessionStatsCard config={config} queueLength={snap.queueLength} sessionId={snap.sessionId} />
+
+      <section className="card">
+        <h2>🐟 Cá vừa lên</h2>
+        {catches.length === 0 ? (
+          <p className="muted">Chưa có mẻ nào.</p>
+        ) : (
+          <ul className="feed catches">
+            {catches.slice(0, 15).map((c, i) => (
+              <li key={`${c.at}-${c.platformId}-${i}`}>
+                <FishThumb small name={c.name} emoji={c.emoji} size={28} />
+                <span>
+                  <b>{c.displayName}</b> — {c.name}
+                  {c.kg > 0 ? <span className="kg"> {fmtKg(c.kg)} kg</span> : <span className="muted"> (rác)</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="card">
-        <h2>Sếp</h2>
-        <div className="row">
-          <span className="pill">{MOOD_LABELS[snap.boss.mood]}</span>
-          <span>Bình tĩnh: {Math.round(snap.boss.calm)}</span>
-          <span>Chịu đựng: {Math.round(snap.boss.stamina)}</span>
-        </div>
-        <div className="row">
-          <input type="range" min={0} max={100} value={calm} onChange={(e) => setCalm(Number(e.target.value))} />
-          <span>{calm}</span>
-          <button onClick={() => run(() => api.setCalm(calm), 'Đã chỉnh độ bình tĩnh')}>Đặt độ bình tĩnh</button>
-        </div>
+        <h2>⚖️ Bảng cân cá</h2>
+        <Board rows={snap.kgBoard ?? []} value={(e) => `${fmtKg(e.kg)} kg`} empty="Chưa ai câu được cá." />
+      </section>
+
+      <section className="card">
+        <h2>🎁 Top quà tặng</h2>
+        <Board rows={snap.leaderboard} value={(e) => `${e.diamonds ?? 0} 💎`} empty="Chưa có quà." />
       </section>
 
       <section className="card">
@@ -128,7 +163,8 @@ export function DashboardPage({
         <p className="muted">Chạy hoạt ảnh ngay (bỏ qua cooldown và bật/tắt, không cộng điểm cho ai).</p>
         <div className="row wrap">
           {config.actions.map((a) => (
-            <button key={a.id} onClick={() => run(() => api.trigger(a.id), `Đã kích hoạt: ${a.name}`)}>
+            <button key={a.id} className="with-thumb" onClick={() => run(() => api.trigger(a.id), `Đã kích hoạt: ${a.name}`)}>
+              {a.fish && <FishThumb actionId={a.id} name={a.fish.name} emoji={a.fish.emoji} size={24} />}
               {a.name}
             </button>
           ))}
@@ -144,7 +180,7 @@ export function DashboardPage({
               <span>
                 {snap.collective.progress}/{snap.collective.goal} · {snap.collective.participants} người
               </span>
-              <span className="pill">{snap.collective.status}</span>
+              <span className="pill">{COLLECTIVE_STATUS[snap.collective.status] ?? snap.collective.status}</span>
             </div>
             <progress max={snap.collective.goal} value={snap.collective.progress} />
           </>
@@ -179,5 +215,37 @@ export function DashboardPage({
         </ul>
       </section>
     </div>
+  );
+}
+
+/** Đồng hồ chạy theo giờ server (bù lệch giờ máy theo snapshot.serverTime). */
+function useServerNow(serverTime: number): number {
+  const [offset] = useState(() => serverTime - Date.now());
+  const [now, setNow] = useState(() => Date.now() + offset);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now() + offset), 1000);
+    return () => clearInterval(t);
+  }, [offset]);
+  return now;
+}
+
+function Board({ rows, value, empty }: { rows: LeaderboardEntry[]; value: (e: LeaderboardEntry) => string; empty: string }) {
+  if (rows.length === 0) return <p className="muted">{empty}</p>;
+  return (
+    <table className="dense">
+      <tbody>
+        {rows.slice(0, 10).map((e) => (
+          <tr key={e.platformId}>
+            <td style={{ width: 32 }}>{e.rank}</td>
+            <td>
+              {e.displayName} <span className="muted">· {e.title}</span>
+            </td>
+            <td style={{ textAlign: 'right' }}>
+              <b>{value(e)}</b>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

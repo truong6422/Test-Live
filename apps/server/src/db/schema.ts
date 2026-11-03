@@ -1,8 +1,8 @@
 import { boolean, index, integer, jsonb, pgTable, primaryKey, serial, text, timestamp } from 'drizzle-orm/pg-core';
-import type { ActionTrigger, BossEffect, Lane } from '@sep/shared';
+import type { ActionTrigger, BigFish, KingEffect, Lane } from '@cau/shared';
 
 /**
- * Nhân viên (người xem đã tham gia). Chỉ lưu những gì cần cho trò chơi:
+ * Cần thủ (người xem đã tham gia). Chỉ lưu những gì cần cho trò chơi:
  * ID nền tảng, username, tên hiển thị, URL avatar và thống kê trong game.
  * Người chỉ vào xem mà không tương tác thì KHÔNG được lưu.
  */
@@ -13,10 +13,13 @@ export const players = pgTable('players', {
   avatarUrl: text('avatar_url'),
   totalParticipations: integer('total_participations').notNull().default(0),
   totalPoints: integer('total_points').notNull().default(0),
-  /** Tổng kim cương đã tặng (xếp hạng "phá Sếp" bằng quà). */
+  /** Tổng kim cương đã tặng (bảng TOP QUÀ TẶNG). */
   totalDiamonds: integer('total_diamonds').notNull().default(0),
   actionCounts: jsonb('action_counts').$type<Record<string, number>>().notNull().default({}),
+  /** Tổng cân cá đã câu (gram, số nguyên) — BẢNG CÂN CÁ toàn thời gian. Migration 0001_fishing. */
+  totalGrams: integer('total_grams').notNull().default(0),
   grantedTitles: jsonb('granted_titles').$type<string[]>().notNull().default([]),
+  // Mặc định SQL giữ nguyên như migration 0000 (code luôn ghi title nên giá trị này không bao giờ hiện ra).
   title: text('title').notNull().default('Nhân viên chăm chỉ'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
@@ -40,7 +43,9 @@ export const sessionPlayers = pgTable(
       .references(() => players.platformId, { onDelete: 'cascade' }),
     participations: integer('participations').notNull().default(0),
     points: integer('points').notNull().default(0),
-    diamonds: integer('diamonds').notNull().default(0)
+    diamonds: integer('diamonds').notNull().default(0),
+    /** Cân cá trong phiên (gram). Migration 0001_fishing. */
+    grams: integer('grams').notNull().default(0)
   },
   (t) => [primaryKey({ columns: [t.sessionId, t.playerId] })]
 );
@@ -55,8 +60,11 @@ export const actions = pgTable('actions', {
   userCooldownMs: integer('user_cooldown_ms').notNull(),
   priority: integer('priority').notNull(),
   lanes: jsonb('lanes').$type<Lane[]>().notNull(),
-  bossEffect: jsonb('boss_effect').$type<BossEffect>().notNull(),
+  // Cột SQL giữ tên cũ `boss_effect` (không đổi tên cột); phía code là tác động lên Cá Thần.
+  kingEffect: jsonb('boss_effect').$type<KingEffect>().notNull(),
   points: integer('points').notNull().default(0),
+  /** Loài cá to của hành động kéo cá (null = không có). Migration 0001_fishing. */
+  fish: jsonb('fish').$type<BigFish>(),
   sortOrder: integer('sort_order').notNull().default(0)
 });
 
@@ -105,7 +113,7 @@ export const eventHistory = pgTable(
   (t) => [index('event_history_created_at_idx').on(t.createdAt), index('event_history_session_idx').on(t.sessionId)]
 );
 
-/** Cấu hình dạng key/value: boss, collective, limits. */
+/** Cấu hình dạng key/value: king, fishing, collective, limits, work, version (bản cũ còn có `boss` = king). */
 export const settings = pgTable('settings', {
   key: text('key').primaryKey(),
   value: jsonb('value').notNull()

@@ -2,7 +2,14 @@ import { z } from 'zod';
 
 // Schema validate dữ liệu admin gửi lên REST API.
 
-export const laneSchema = z.enum(['boss', 'desk', 'car', 'meeting', 'toilet', 'staff']);
+export const laneSchema = z.enum(['king', 'lake', 'dock', 'sky', 'underwater', 'anglers']);
+
+export const bigFishSchema = z.object({
+  emoji: z.string().min(1).max(8),
+  name: z.string().min(1).max(40),
+  minKg: z.number().min(0).max(10_000),
+  maxKg: z.number().min(0).max(10_000)
+});
 
 export const actionUpdateSchema = z
   .object({
@@ -15,8 +22,9 @@ export const actionUpdateSchema = z
     userCooldownMs: z.number().int().min(0).max(600_000),
     priority: z.number().int().min(0).max(10_000),
     points: z.number().int().min(0).max(100_000),
-    bossCalm: z.number().int().min(-100).max(100),
-    bossStamina: z.number().int().min(-100).max(100),
+    kingCalm: z.number().int().min(-100).max(100),
+    kingStamina: z.number().int().min(-100).max(100),
+    fish: bigFishSchema.nullable(),
     /** Chỉ người đã follow mới kích hoạt được bằng bình luận/like/share/follow (quà luôn được). */
     followersOnly: z.boolean()
   })
@@ -36,6 +44,15 @@ export const giftMappingSchema = z.object({
 
 export const giftMappingsSchema = z.array(giftMappingSchema).max(200);
 
+export const lootItemSchema = z.object({
+  emoji: z.string().min(1).max(8),
+  name: z.string().min(1).max(40),
+  weight: z.number().min(0).max(10_000),
+  minKg: z.number().min(0).max(1000),
+  maxKg: z.number().min(0).max(1000),
+  points: z.number().int().min(0).max(100_000)
+});
+
 export const workTaskSchema = z.object({
   id: z.string().regex(/^[a-z0-9_]{1,40}$/),
   name: z.string().min(1).max(60),
@@ -44,12 +61,46 @@ export const workTaskSchema = z.object({
   emoji: z.string().min(1).max(8),
   text: z.string().max(80),
   points: z.number().int().min(0).max(100_000),
-  userCooldownMs: z.number().int().min(0).max(600_000)
+  userCooldownMs: z.number().int().min(0).max(600_000),
+  loot: z.array(lootItemSchema).max(40).optional()
 });
 
 export const workTasksSchema = z.array(workTaskSchema).max(50);
 
-export const bossAdjustSchema = z.object({
+export const fishingUpdateSchema = z
+  .object({
+    tickMs: z.number().int().min(1000).max(600_000),
+    catchesPerTick: z.number().int().min(1).max(50),
+    bigFishShadowMs: z.number().int().min(0).max(120_000),
+    loot: z.array(lootItemSchema).min(1).max(40),
+    bigFishEveryMs: z.number().int().min(0).max(24 * 3600_000),
+    bigFishActionId: z.string().min(1).max(40),
+    frontSeats: z.number().int().min(0).max(12),
+    idleKickMs: z.number().int().min(0).max(24 * 3600_000)
+  })
+  .partial();
+
+/** Một từ trong bộ lọc: không khoảng trắng (so khớp theo từng từ). */
+export const blockedWordSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(40)
+  .regex(/^\S+$/, 'Mỗi mục chỉ là một từ (không có khoảng trắng)');
+
+export const blocklistSchema = z.array(blockedWordSchema).max(1000);
+
+export const blocklistTestSchema = z.object({
+  text: z.string().max(500),
+  /** Thử với danh sách nháp (chưa lưu); bỏ trống = danh sách đang dùng. */
+  words: blocklistSchema.optional()
+});
+
+export const lakeKickSchema = z.object({
+  platformId: z.string().min(1).max(200)
+});
+
+export const kingAdjustSchema = z.object({
   calm: z.number().min(0).max(100)
 });
 

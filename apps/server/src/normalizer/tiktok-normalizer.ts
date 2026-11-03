@@ -1,4 +1,4 @@
-import type { LiveUser, NormalizedEvent } from '@sep/shared';
+import type { LiveUser, NormalizedEvent } from '@cau/shared';
 import { cleanAvatarUrl, cleanComment, cleanDisplayName } from './sanitize';
 
 /**
@@ -89,7 +89,7 @@ export class TikTokNormalizer {
     return {
       platformId: platformId || `u:${username}`,
       username: username || platformId,
-      displayName: cleanDisplayName(u?.nickname, username || 'Nhân viên ẩn danh'),
+      displayName: cleanDisplayName(u?.nickname, username || 'Cần thủ ẩn danh'),
       avatarUrl: cleanAvatarUrl(u?.avatarThumb?.urlList?.[0] ?? u?.avatarMedium?.urlList?.[0]),
       follower: followerOf(u, identity)
     };

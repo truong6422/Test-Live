@@ -9,7 +9,7 @@ export const INK = 0x1b1b24;
  * Vẽ ảnh pixel từ lưới ký tự. Các ô liền kề cùng màu trên một hàng được gộp thành một hình chữ nhật
  * để giảm số hình phải vẽ. Chỉ gọi khi dựng/đổi nhân vật — không gọi mỗi khung hình.
  */
-export function drawGrid(g: Graphics, grid: readonly string[], pal: Palette, px: number, ox = 0, oy = 0): Graphics {
+export function drawGrid<G extends Graphics | GraphicsContext>(g: G, grid: readonly string[], pal: Palette, px: number, ox = 0, oy = 0): G {
   grid.forEach((row, y) => {
     let x = 0;
     while (x < row.length) {
