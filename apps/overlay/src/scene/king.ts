@@ -127,22 +127,32 @@ export class King extends Container implements KingLike {
       this.wrap.addChild(this.art);
     }
     if (this.submerged) {
-      // bóng cá dưới nước (cùng hình, tô tối, mờ)
+      // Trên hồ chỉ có BÓNG cá đen mờ dưới nước — không bao giờ nhô cả con cá lên mặt nước.
       this.shadowWrap = new Container();
-      const shadow = tex ? artSprite(tex) : new Graphics(bodyContext());
-      shadow.tint = 0x173a4a;
-      shadow.alpha = 0.4;
+      // bóng cá mềm: thân bầu dục + vây + đuôi, đầu bên trái (ảnh cá to đều ở tư thế nhảy cong người, làm bóng trông lạ)
+      const L = KING_W / 2;
+      const shadow = new Graphics()
+        .ellipse(-L * 0.08, 0, L * 0.82, KING_H * 0.3)
+        .fill(0x0b1e28)
+        .poly([L * 0.6, 0, L * 1.02, -KING_H * 0.34, L * 0.92, 0, L * 1.02, KING_H * 0.34])
+        .fill(0x0b1e28)
+        .poly([-L * 0.2, -KING_H * 0.24, L * 0.15, -KING_H * 0.44, L * 0.2, -KING_H * 0.22])
+        .fill(0x0b1e28)
+        .poly([-L * 0.35, KING_H * 0.2, -L * 0.15, KING_H * 0.42, -L * 0.05, KING_H * 0.2])
+        .fill(0x0b1e28);
+      shadow.alpha = 0.45;
       this.shadowWrap.addChild(shadow);
+      // belowMask không gắn vào cây hiển thị (bóng hiện nguyên hình); giữ để tick() không phải rẽ nhánh
       this.belowMask = new Graphics();
       this.aboveMask = new Graphics();
-      this.shadowWrap.mask = this.belowMask;
       this.wrap.mask = this.aboveMask;
+      this.wrap.visible = false;
       for (let i = 0; i < 2; i++) {
         const r = new Graphics(rippleContext());
         r.y = WL;
         this.ripples.push(r);
       }
-      this.addChild(this.shadowWrap, this.belowMask, ...this.ripples, this.wrap, this.aboveMask);
+      this.addChild(this.shadowWrap, ...this.ripples, this.wrap, this.aboveMask);
     } else {
       this.addChild(this.wrap);
     }
@@ -189,7 +199,7 @@ export class King extends Container implements KingLike {
       this.ripples.forEach((r, i) => {
         const k = ((t / 2400 + i * 0.5) % 1 + 1) % 1;
         r.scale.set(0.75 + k * 0.6 + thrash * 0.2, 0.75 + k * 0.6);
-        r.alpha = (1 - k) * (rise > 0.95 ? 0.3 : 0.9);
+        r.alpha = (1 - k) * 0.45;
       });
     }
     if (!this.art) this.drawWhiskers(t, thrash);
