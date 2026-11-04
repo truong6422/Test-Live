@@ -104,10 +104,11 @@ export function WorkPage({
   const saved = config.work ?? [];
   const [rows, setRows] = useState<Row[]>(() => saved.map(toRow));
   const [errors, setErrors] = useState<string[]>([]);
+  // So theo NỘI DUNG (không theo tham chiếu): reloadConfig sau khi lưu trang khác tạo object mới → không được xoá phần đang sửa dở ở trang này.
   useEffect(() => {
     setRows(saved.map(toRow));
     setErrors([]);
-  }, [config.work]);
+  }, [JSON.stringify(config.work ?? [])]);
 
   const update = (key: string, patch: Partial<Row>) =>
     setRows((rs) =>
@@ -150,13 +151,13 @@ export function WorkPage({
 
   return (
     <div className="stack">
-      <h1>Việc câu</h1>
+      <h1>Biểu cảm bình luận</h1>
       <p className="muted">
         Việc câu miễn phí: người xem gõ bình luận để cần thủ của họ diễn biểu cảm vui ngay tại chỗ (thay mồi, uống trà đá, hát hò…), được cộng
-        điểm — giữ chân người xem. Không ảnh hưởng Cá Thần. Câu cá tự động và bảng cá nằm ở tab <b>Câu cá</b>.
+        điểm — giữ chân người xem. Không ảnh hưởng Cá Thần. Câu cá tự động và bảng cá nằm ở tab <b>Câu tự động</b>.
       </p>
       <p className="muted">
-        Từ khoá so khớp không dấu, theo nguyên từ (giống trang Hành động). Hồi chiêu tính riêng cho từng người xem.
+        Từ khoá so khớp không dấu, theo nguyên từ (giống tab Cá to (quà)). Hồi chiêu tính riêng cho từng người xem.
       </p>
       {rows.length === 0 && (
         <section className="card">

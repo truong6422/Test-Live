@@ -1,5 +1,14 @@
 import type { CollectiveState, EventOutcome, GameConfig, HistoryEntry } from '@cau/shared';
 import type { PlayerRecord, SessionStat } from '../players/players';
+export type { SessionStat };
+
+/** Trạng thái chạy để khôi phục sau khi khởi động lại. */
+export interface RuntimeState {
+  running: boolean;
+  sessionId: string | null;
+  /** Mốc (ms) sự kiện LIVE hợp lệ gần nhất hoặc lần bấm chạy gần nhất. */
+  lastActivityAt: number;
+}
 
 export interface HistoryQuery {
   limit: number;
@@ -19,6 +28,13 @@ export interface GameStore {
 
   loadPlayers(): Promise<PlayerRecord[]>;
   savePlayers(sessionId: string | null, batch: { player: PlayerRecord & { title: string }; session: SessionStat | undefined }[]): Promise<void>;
+
+  /** Thống kê từng người của một phiên (để nạp lại bộ đếm phiên sau khi khởi động lại). */
+  loadSessionStats(sessionId: string): Promise<{ playerId: string; stat: SessionStat }[]>;
+
+  /** Trạng thái chạy (game có đang chạy, hoạt động gần nhất) — lưu trong bảng settings, không cần migration. */
+  loadRuntime(): Promise<RuntimeState | null>;
+  saveRuntime(state: RuntimeState): Promise<void>;
 
   startSession(id: string, tiktokUsername: string | null): Promise<void>;
   endSession(id: string): Promise<void>;

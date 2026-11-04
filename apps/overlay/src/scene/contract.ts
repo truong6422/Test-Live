@@ -26,7 +26,7 @@ export interface LakeSpots {
 }
 
 /**
- * Khu ngồi: 'front' = chiếu giữa trước mặt hồ (top quà / câu lâu, to và nổi bật), 'left' | 'right' = hai bên bờ.
+ * Khu ngồi: 'front' = Bến Vàng trước mặt hồ (top quà / câu lâu, to và nổi bật), 'left' | 'right' = hai bên bờ.
  * Server quyết định qua RosterMember.seat. lake.ts export const SHIRTS: number[] (bảng màu áo, chọn theo hash ID).
  * (DOCKS / DockInfo cũ đã bỏ.)
  */
@@ -66,9 +66,13 @@ export interface Anglers {
    */
   catches(events: CatchEvent[]): void;
   spotOf(displayName: string | undefined): Spot | undefined;
+  /** Làm nổi bảng tên của một người (người vừa tặng quà): phóng to + nhấp nháy vàng. null = tắt. */
+  spotlight(spot: Spot | null): void;
   occupied(): Spot[];
   /** Ẩn/hiện nhân vật ngồi tại chỗ (khi chủ chỗ đi diễn hành động). */
   setAway(spot: Spot, away: boolean): void;
+  /** Ẩn/hiện cần câu thường của người ngồi (khi hoạt ảnh vẽ cần cong kéo cá to ngay tại ghế — khỏi hai cần). */
+  setRodHidden(spot: Spot, hidden: boolean): void;
   /** Cả hồ cùng phản ứng (vd. "cheer" khi kéo Cá Thần, "wet" khi lũ, "scared" khi sấm). */
   reactAll(kind: 'cheer' | 'wet' | 'scared' | 'pull' | null): void;
   /** Mọi cần thủ cùng kéo; k 0..1 = độ nghiêng người về sau. */
@@ -136,6 +140,19 @@ export interface SceneRefs {
   removeWalker(w: WalkerLike): void;
   /** Rung cả sân khấu (0..1) cho cảnh kéo cá to; về 0 trong finish(). */
   setShake(k: number): void;
+  /**
+   * Camera của cảnh hồ (không ảnh hưởng HUD HTML, băng rôn, đáy hồ).
+   * focus(owner, x, y, zoom, screenY?): lia mượt để điểm (x, y) của thế giới hiện ở (540, screenY) với độ zoom; gọi mỗi khung được.
+   * release(owner): về toàn cảnh — chỉ tác dụng nếu owner đang giữ camera (quà mới hơn giành camera).
+   */
+  camera: {
+    focus(owner: string, x: number, y: number, zoom: number, screenY?: number): void;
+    release(owner: string): void;
+    /** Toạ độ thế giới → toạ độ màn hình (sau zoom). */
+    toScreen(x: number, y: number): { x: number; y: number };
+  };
+  /** Lớp hiệu ứng KHÔNG bị zoom (toạ độ màn hình): chữ to, tia sáng, pháo hoa — không bị phóng to tràn mép. */
+  screenFx: Container;
   /** Thuyền nan (trang trí; có thể dùng trong hoạt ảnh). root đặt ở boatDock khi rảnh. */
   boat: { root: Container; rock: number };
   /** Cống xả: setOpen(0..1) mở cửa cống; mực nước tăng setFlood(0..1). */

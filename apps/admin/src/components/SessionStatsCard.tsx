@@ -1,42 +1,41 @@
-import { useEffect, useState } from 'react';
+import { memo, useState } from 'react';
 import type { GameConfig, SessionStats } from '@cau/shared';
 import { api } from '../api';
+import { usePolling } from '../hooks';
 import { FishThumb } from './FishSprite';
 import { fmtDuration, fmtKg } from './LakeCard';
 
 const STATS_POLL_MS = 3000;
 
 /** Thống kê phiên LIVE hiện tại (server giữ trong bộ nhớ — khởi động lại server thì về 0). */
-export function SessionStatsCard({
+export const SessionStatsCard = memo(function SessionStatsCard({
   config,
   queueLength,
-  sessionId
+  sessionId,
+  running
 }: {
   config: GameConfig;
   queueLength: number;
   sessionId: string | null;
+  /** Tên các hoạt ảnh đang chạy (rỗng = không có). */
+  running: string;
 }) {
   const [s, setS] = useState<SessionStats | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      api
+  usePolling(
+    () =>
+      void api
         .stats()
-        .then((x) => alive && setS(x))
-        .catch(() => {});
-    void load();
-    const t = setInterval(load, STATS_POLL_MS);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [sessionId]);
+        .then(setS)
+        .catch(() => {}),
+    STATS_POLL_MS,
+    [sessionId]
+  );
 
   if (!s) {
     return (
       <section className="card">
         <h2>📊 Thống kê phiên</h2>
-        <p className="muted">Đang tải…</p>
+        <p className="empty">Đang tải…</p>
       </section>
     );
   }
@@ -64,18 +63,21 @@ export function SessionStatsCard({
         </div>
         <div>
           <dt>Cá to đã kéo</dt>
-          <dd>{s.bigFishPulled}</dd>
+          <dd>{s.bigFishPulled.toLocaleString('vi-VN')}</dd>
         </div>
         <div>
           <dt>Lượt quà nhận</dt>
           <dd>
-            {s.giftsReceived}
+            {s.giftsReceived.toLocaleString('vi-VN')}
             {s.giftDiamonds > 0 && <small className="muted"> · {s.giftDiamonds.toLocaleString('vi-VN')} 💎</small>}
           </dd>
         </div>
         <div>
           <dt>Hàng đợi</dt>
-          <dd>{queueLength}</dd>
+          <dd>
+            {queueLength}
+            {running && <small className="muted"> · đang chạy: {running}</small>}
+          </dd>
         </div>
       </dl>
       <div className="biggest">
@@ -97,4 +99,4 @@ export function SessionStatsCard({
       <p className="muted">Thời gian game chạy trong phiên: {fmtDuration(s.activeMs)}. Số liệu về 0 khi reset phiên hoặc khởi động lại server.</p>
     </section>
   );
-}
+});

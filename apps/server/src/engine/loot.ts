@@ -49,9 +49,18 @@ export function pickLoot(loot: readonly LootItem[] | undefined, random: Random):
   return { item, catch: { emoji: item.emoji, name: item.name, kg: rollKg(item.minKg, item.maxKg, random) } };
 }
 
-/** Chốt cân một con cá to. */
+/** Chốt cân một con cá to (ngẫu nhiên trong khoảng) — chỉ dùng cho sự kiện MIỄN PHÍ (cá to định kỳ, tập thể). */
 export function rollBigFish(fish: BigFish, random: Random): Catch {
   return { emoji: fish.emoji, name: fish.name, kg: rollKg(fish.minKg, fish.maxKg, random) };
+}
+
+/**
+ * Cân CỐ ĐỊNH của cá to khi có quà = giữa khoảng [minKg, maxKg] (làm tròn 0,1 kg).
+ * Chính sách TikTok LIVE cấm "trò may rủi" gắn với quà: người tặng phải biết trước chắc chắn mình nhận gì,
+ * nên kết quả của quà không được có yếu tố ngẫu nhiên (cả loài cá lẫn cân nặng).
+ */
+export function fixedBigFish(fish: BigFish): Catch {
+  return { emoji: fish.emoji, name: fish.name, kg: rollKg(fish.minKg, fish.maxKg, () => 0.5) };
 }
 
 /** Định dạng cân kiểu Việt: 1.5 → "1,5". */

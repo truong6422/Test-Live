@@ -24,6 +24,10 @@ export interface TikTokConnectorOptions {
   offlineRetryMs?: number;
   random?: () => number;
   now?: () => number;
+  /** connect() treo quá lâu thì bỏ và hẹn thử lại. */
+  connectTimeoutMs?: number;
+  /** Kết nối giữ được bao lâu thì backoff về 0. */
+  stableMs?: number;
 }
 
 const defaultFactory =
@@ -60,6 +64,12 @@ export class TikTokConnector implements LiveConnector {
   private generation = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private streakTimer: ReturnType<typeof setInterval> | null = null;
+  /** Số lần thử lại liên tiếp (quyết định backoff); chỉ về 0 khi kết nối đứng vững `stableMs`. */
+  private failures = 0;
+  /** Mốc kết nối thành công gần nhất (0 = chưa / đã dùng để tính backoff). */
+  private connectedAt = 0;
+  private readonly connectTimeoutMs: number;
+  private readonly stableMs: number;
   private eventListeners: ConnectorEventListener[] = [];
   private stateListeners: ConnectorStateListener[] = [];
   private st: ConnectorState = {
@@ -79,6 +89,8 @@ export class TikTokConnector implements LiveConnector {
     this.offlineRetryMs = opts.offlineRetryMs ?? 45_000;
     this.random = opts.random ?? Math.random;
     this.now = opts.now ?? Date.now;
+    this.connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
+    this.stableMs = opts.stableMs ?? 60_000;
   }
 
   onEvent(fn: ConnectorEventListener): void {
@@ -99,7 +111,11 @@ export class TikTokConnector implements LiveConnector {
     if (!username) throw new Error('Username TikTok không hợp lệ (ví dụ: @tenkenh hoặc https://www.tiktok.com/@tenkenh/live)');
     await this.disconnect();
     this.desired = username;
+    this.failures = 0;
     this.setState({ username, reconnectAttempt: 0, lastError: null, roomId: null, viewerCount: 0 });
+    // Hai lời gọi connect() chồng nhau: disconnect() của lời gọi sau có thể chạy trước khi lời gọi trước đặt timer
+    // → luôn xoá timer cũ trước khi đặt mới (không rò setInterval).
+    if (this.streakTimer) clearInterval(this.streakTimer);
     this.streakTimer = setInterval(() => this.flushStreaks(), 1000);
     await this.attempt(++this.generation);
   }
@@ -125,10 +141,18 @@ export class TikTokConnector implements LiveConnector {
     const conn = this.factory(username);
     this.conn = conn;
     this.wire(conn, gen);
+    let timeout: ReturnType<typeof setTimeout> | null = null;
     try {
-      const res = (await conn.connect()) as { roomId?: string } | undefined;
+      // connect() của thư viện có thể treo (sign server / mạng) → hết giờ thì coi như lỗi và hẹn thử lại.
+      const res = (await Promise.race([
+        conn.connect(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`Kết nối TikTok quá ${Math.round(this.connectTimeoutMs / 1000)}s`)), this.connectTimeoutMs);
+        })
+      ])) as { roomId?: string } | undefined;
       if (gen !== this.generation) return;
       this.log.info('Đã kết nối TikTok LIVE', { username, roomId: res?.roomId });
+      this.connectedAt = this.now();
       this.setState({ status: 'connected', roomId: res?.roomId ?? null, lastError: null, reconnectAttempt: 0 });
     } catch (err) {
       if (gen !== this.generation) return;
@@ -137,6 +161,8 @@ export class TikTokConnector implements LiveConnector {
       this.log.warn('Kết nối TikTok thất bại', { username, offline, message });
       this.setState({ status: offline ? 'offline' : 'error', lastError: message });
       this.scheduleReconnect(gen, offline);
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 
@@ -144,7 +170,7 @@ export class TikTokConnector implements LiveConnector {
     const live = () => gen === this.generation;
     const emit = (e: ReturnType<TikTokNormalizer['chat']>) => {
       if (!e || !live()) return;
-      for (const fn of this.eventListeners) fn(e);
+      this.dispatch(e);
     };
     const guard =
       <T>(name: string, fn: (d: T) => void) =>
@@ -190,7 +216,11 @@ export class TikTokConnector implements LiveConnector {
   private scheduleReconnect(gen: number, offline: boolean): void {
     if (!this.desired || gen !== this.generation) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    const attempt = this.st.reconnectAttempt + 1;
+    // Backoff chỉ về 0 khi kết nối đã đứng vững `stableMs`: kết nối được rồi rớt ngay (flapping) vẫn giãn dần,
+    // không dội TikTok / sign server mỗi 2 giây (dễ bị chặn IP / hết quota).
+    if (this.connectedAt > 0 && this.now() - this.connectedAt >= this.stableMs) this.failures = 0;
+    this.connectedAt = 0;
+    const attempt = ++this.failures;
     const exp = Math.min(this.maxDelayMs, this.baseDelayMs * 2 ** (attempt - 1));
     const base = offline ? Math.max(this.offlineRetryMs, exp) : exp;
     const delay = Math.round(base * (0.8 + this.random() * 0.4));
@@ -214,13 +244,28 @@ export class TikTokConnector implements LiveConnector {
 
   private flushStreaks(all = false): void {
     const now = all ? Number.MAX_SAFE_INTEGER : this.now();
-    for (const e of this.normalizer.flushStale(now)) {
-      for (const fn of this.eventListeners) fn(e);
+    for (const e of this.normalizer.flushStale(now)) this.dispatch(e);
+  }
+
+  /** Phát sự kiện cho listener; listener lỗi không được làm hỏng connector (gọi từ setInterval / handler thư viện). */
+  private dispatch(e: NonNullable<ReturnType<TikTokNormalizer['chat']>>): void {
+    for (const fn of this.eventListeners) {
+      try {
+        fn(e);
+      } catch (err) {
+        this.log.warn('Listener sự kiện TikTok lỗi', { kind: e.kind, err });
+      }
     }
   }
 
   private setState(patch: Partial<ConnectorState>): void {
     this.st = { ...this.st, ...patch };
-    for (const fn of this.stateListeners) fn(this.state());
+    for (const fn of this.stateListeners) {
+      try {
+        fn(this.state());
+      } catch (err) {
+        this.log.warn('Listener trạng thái TikTok lỗi', { err });
+      }
+    }
   }
 }

@@ -42,6 +42,7 @@ export function LootEditor({ loot, onChange }: { loot: LootRow[]; onChange: (loo
       <div className="row">
         <h3 style={{ flex: 1 }}>🎏 Bảng cá ({loot.length} món)</h3>
       </div>
+      <div className="table-scroll">
       <table className="dense">
         <thead>
           <tr>
@@ -83,6 +84,7 @@ export function LootEditor({ loot, onChange }: { loot: LootRow[]; onChange: (loo
           ))}
         </tbody>
       </table>
+      </div>
       <div className="row">
         <button onClick={() => onChange([...loot, newLootRow()])} disabled={loot.length >= 40}>
           + Thêm món

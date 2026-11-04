@@ -17,13 +17,24 @@ export function LivePreview({ run, notify }: { run: Run; notify: Notify }) {
   const [path, setPath] = useState<string | null>(null);
   const [on, setOn] = useState(() => localStorage.getItem(STORAGE_KEY) !== '0');
   const [reloadKey, setReloadKey] = useState(0);
+  // Tab trình duyệt bị ẩn (đang ở cửa sổ OBS) → gỡ iframe: overlay trong khung là cả một cảnh PixiJS + WS, chạy hàng giờ tốn CPU/RAM.
+  const [pageVisible, setPageVisible] = useState(() => !document.hidden);
+  useEffect(() => {
+    const onVis = () => setPageVisible(!document.hidden);
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   useEffect(() => {
     void run(api.overlayUrl).then((r) => r && setPath(r.path));
   }, [run]);
 
   const toggle = () => {
-    localStorage.setItem(STORAGE_KEY, on ? '0' : '1');
+    try {
+      localStorage.setItem(STORAGE_KEY, on ? '0' : '1');
+    } catch {
+      /* bỏ qua */
+    }
     setOn(!on);
   };
   const fullUrl = path ? new URL(path, location.origin).toString() : '';
@@ -41,15 +52,15 @@ export function LivePreview({ run, notify }: { run: Run; notify: Notify }) {
 
   return (
     <section className="card">
-      <div className="row">
-        <h2 style={{ flex: 1, margin: 0 }}>📺 Xem trước hồ câu</h2>
+      <div className="card-head">
+        <h2>📺 Xem trước hồ câu</h2>
         <button className="ghost" onClick={toggle}>
           {on ? 'Ẩn khung' : 'Hiện khung'}
         </button>
       </div>
       <div className="preview-wrap">
         <div className="preview-frame" style={{ width: PREVIEW_W, height: (PREVIEW_W * OVERLAY_H) / OVERLAY_W }}>
-          {on && path ? (
+          {on && path && pageVisible ? (
             <iframe
               key={reloadKey}
               title="Overlay hồ câu"

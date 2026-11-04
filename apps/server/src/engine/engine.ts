@@ -6,6 +6,7 @@ import type {
   EventOutcome,
   EventSource,
   FeedItem,
+  FishingConfig,
   GameConfig,
   GameSnapshot,
   HistoryEntry,
@@ -13,22 +14,24 @@ import type {
   LiveUser,
   NormalizedEvent,
   LakeState,
+  RosterMember,
   RunningAction,
   ServerMessage,
   SessionStats,
   WorkTask
 } from '@cau/shared';
+import { DEFAULT_MAX_CATCHES_PER_TICK, DEFAULT_TARGET_CATCH_MS } from '../config/defaults';
 import { applyEffect, initialKing, kingChangedMeaningfully, recover, setCalm } from './king';
 import type { Clock } from './clock';
 import { CollectiveTracker } from './collective';
 import { CooldownTracker } from './cooldown';
 import { Deduper } from './dedupe';
-import { fillCatchText, formatKg, gramsToKg, kgToGrams, pickLoot, rollBigFish, type Catch, type Random } from './loot';
+import { fillCatchText, fixedBigFish, formatKg, gramsToKg, kgToGrams, pickLoot, rollBigFish, type Catch, type Random } from './loot';
 import { giftValue, matchAction, matchWork } from './matcher';
 import { ActionQueue, type QueueItem } from './queue';
 import { RateLimiter } from './rate-limit';
 import { AnimationScheduler } from './scheduler';
-import { PlayerRegistry, type PlayerRecord } from '../players/players';
+import { isDemoPlayer, PlayerRegistry, type PlayerRecord, type SessionStat } from '../players/players';
 
 type ActorSource = EventSource | 'collective';
 
@@ -71,12 +74,16 @@ export const MAX_CONCURRENT_ACTIONS = 1;
 
 /** Khoảng cách tối thiểu giữa hai lần nhắc follow cho cùng một người. */
 const FOLLOW_HINT_MS = 60_000;
-export const FOLLOW_HINT_TEXT = 'Follow kênh để kéo cá to bằng bình luận — hoặc tặng quà để kéo cá to ngay!';
+export const FOLLOW_HINT_TEXT = 'Người theo dõi kênh được đội nón lá 👒';
 
 /** Tên hiển thị khi người kích hoạt là cả hồ (sự kiện tập thể). */
 const CROWD_NAME = 'Cả hồ';
 /** Cá to định kỳ bị hoãn vì đang kéo cá quà: chờ thêm chừng này sau khi hàng đợi dự kiến trống. */
 export const BIG_FISH_POSTPONE_GAP_MS = 1000;
+/** Cá to định kỳ bị hoãn vì quà tối đa chừng này; quá hạn thì chạy ngay sau hoạt ảnh đang chạy. */
+export const BIG_FISH_MAX_POSTPONE_MS = 60_000;
+/** Ưu tiên của cá to định kỳ đã quá hạn hoãn (trên mọi hành động khác trong hàng đợi). */
+const BIG_FISH_OVERDUE_PRIORITY = 100_000;
 /** Admin mời rời hồ: trong chừng này người đó không tự vào lại bằng bình luận (tặng quà vẫn vào). */
 export const KICK_REJOIN_BLOCK_MS = 10 * 60_000;
 
@@ -144,6 +151,15 @@ export class GameEngine {
   private nextBigFishAt = 0;
   /** Tick đầu tiên thấy cá to đến hạn (0 = chưa). Cá to chỉ ra ở tick sau đó nếu không có quà chen vào. */
   private bigFishArmedAt = 0;
+  /** Lần đầu cá to định kỳ hiện tại bị hoãn vì quà (0 = chưa hoãn). */
+  private bigFishPostponedSince = 0;
+  /** Người trúng cá to định kỳ lần trước (không trúng hai lần liền khi hồ ≥ 2 người). */
+  private lastBigFishWinner: string | null = null;
+  /** TikTok báo LIVE đã kết thúc / kênh offline: tạm dừng câu tự động, cá to, tập thể (tới khi kết nối lại). */
+  private streamOffline = false;
+  private offlineSince = 0;
+  /** Mốc sự kiện LIVE hợp lệ gần nhất (sau chống trùng / giới hạn tần suất). */
+  private lastEventAt = 0;
 
   private listeners = new Set<EngineListener>();
   /** Thống kê phiên (chỉ trong bộ nhớ). */
@@ -151,6 +167,10 @@ export class GameEngine {
   private lastTickAt: number;
   private leaderboardDirty = false;
   private feedDirty = false;
+  /** Tiến trình sự kiện tập thể đổi, chờ flush phát (gom nhiều bình luận vào một tin). */
+  private collectiveMsgDirty = false;
+  /** Danh sách Bến Vàng của lần phát roster gần nhất (null = chưa phát / buộc phát lại). */
+  private lastFrontKey: string | null = null;
   private lastFlushAt = 0;
   private connectors: ConnectorInfo = {
     tiktok: { status: 'disconnected', username: null, roomId: null, viewerCount: 0, lastError: null, reconnectAttempt: 0 },
@@ -200,15 +220,17 @@ export class GameEngine {
     this.sessionId = sessionId;
     this.lastFishingAt = now;
     if (!this.collective.current) this.collective.start(now);
-    if (this.nextBigFishAt === 0) this.scheduleBigFish(now);
-    this.emit({ type: 'game', data: { running: true, sessionId } });
+    // Chưa hẹn, hoặc đã quá hạn trong lúc game dừng → hẹn lại một chu kỳ đủ (không bật cá to ngay khi vừa bấm chạy).
+    if (this.nextBigFishAt === 0 || this.nextBigFishAt <= now) this.scheduleBigFish(now);
+    this.emit({ type: 'game', data: { running: true, sessionId, streamOffline: this.streamOffline } });
     this.emit({ type: 'collective', data: this.collective.current });
   }
 
   stop(): void {
     this.running = false;
+    this.bigFishArmedAt = 0;
     this.queue.clear();
-    this.emit({ type: 'game', data: { running: false, sessionId: this.sessionId } });
+    this.emit({ type: 'game', data: { running: false, sessionId: this.sessionId, streamOffline: this.streamOffline } });
     this.emit({ type: 'queue', data: { length: 0 } });
   }
 
@@ -224,6 +246,8 @@ export class GameEngine {
     this.king = initialKing();
     this.lastBroadcastKing = this.king;
     this.feed = [];
+    this.lastFrontKey = null;
+    this.collectiveMsgDirty = false;
     this.collective.reset(now);
     this.sessionId = newSessionId;
     this.lastFishingAt = now;
@@ -233,6 +257,39 @@ export class GameEngine {
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  /** Game đang chạy VÀ LIVE đang phát: câu tự động / cá to / tập thể hoạt động. */
+  private get active(): boolean {
+    return this.running && !this.streamOffline;
+  }
+
+  get isStreamOffline(): boolean {
+    return this.streamOffline;
+  }
+
+  /**
+   * Host báo trạng thái LIVE: kết thúc / offline → tạm dừng câu tự động, cá to định kỳ, tập thể (quà không tới được);
+   * kết nối lại → chạy tiếp: hẹn lại cá to nếu đã quá hạn, làm mới mốc hoạt động để không mời rời hồ oan.
+   */
+  setStreamOnline(online: boolean): void {
+    const offline = !online;
+    if (offline === this.streamOffline) return;
+    this.streamOffline = offline;
+    const now = this.clock.now();
+    if (online) {
+      this.lastFishingAt = now;
+      this.players.refreshSeen(now);
+      // Đồng hồ cá to "đóng băng" trong lúc offline: dời mốc đúng bằng thời gian đã tạm dừng.
+      if (this.nextBigFishAt > 0) {
+        this.nextBigFishAt += Math.max(0, now - this.offlineSince);
+        this.emit({ type: 'bigfish.next', data: { at: this.nextBigFishAt, shadowMs: this.config.fishing.bigFishShadowMs } });
+      }
+    } else {
+      this.offlineSince = now;
+      this.bigFishArmedAt = 0;
+    }
+    this.emit({ type: 'game', data: { running: this.running, sessionId: this.sessionId, streamOffline: offline } });
   }
 
   get currentSessionId(): string | null {
@@ -284,29 +341,34 @@ export class GameEngine {
 
     if (event.kind === 'join') return 'filtered';
 
-    if (!this.running) {
-      this.record(event, 'game_stopped', null, 'Game đang dừng');
-      return 'game_stopped';
-    }
-
+    // Game DỪNG chỉ dừng câu tự động, cá to định kỳ và sự kiện tập thể. Quà vẫn được xử lý đầy đủ (người xem đã
+    // bỏ tiền — không bao giờ bỏ quà); bình luận vẫn đưa người vào hồ, tim/share/follow vẫn làm mới thời gian
+    // hoạt động — nhưng không kích hoạt việc vui / hành động (trả về 'game_stopped').
     if (this.deduper.isDuplicate(event.id, now)) {
       this.record(event, 'deduped', null, 'Sự kiện trùng');
       return 'deduped';
     }
 
-    if (!this.limiter.allow(event.user.platformId, now)) {
+    // Quà không bao giờ bị giới hạn tần suất: người xem đã bỏ tiền, TikTok đã tự giới hạn, và thả tim dồn dập
+    // (cùng bucket) không được làm mất quà. Bình luận / tim / share / follow vẫn qua bucket.
+    if (event.kind !== 'gift' && !this.limiter.allow(event.user.platformId, now)) {
       this.record(event, 'rate_limited', null, 'Vượt giới hạn tần suất');
       return 'rate_limited';
     }
 
+    this.lastEventAt = now;
     // Mọi lượt tham gia hợp lệ đều được ghi nhận, kể cả không khớp hành động nào.
     const diamonds = event.kind === 'gift' && event.gift ? giftValue(event.gift) : 0;
     const basePoints = event.kind === 'gift' ? diamonds : BASE_POINTS[event.kind];
     const player = this.players.participate(event.user, basePoints);
     if (event.kind === 'follow') this.players.markFollower(event.user.platformId);
     // Bình luận / tặng quà bất kỳ → vào hồ ngồi câu.
-    // (Người vừa bị admin mời rời hồ chỉ vào lại được bằng quà cho tới hết KICK_REJOIN_BLOCK_MS.)
-    if (event.kind === 'comment' || event.kind === 'gift') this.players.join(player.platformId, now, event.kind === 'gift');
+    // Người vừa bị admin mời rời hồ không vào lại (kể cả bằng quà) cho tới hết KICK_REJOIN_BLOCK_MS, và tên họ
+    // không hiện trên overlay (không bong bóng chat, không việc vui, không hoạt ảnh/feed). Quà vẫn được ghi nhận.
+    const kicked = this.players.isKicked(player.platformId, now);
+    if (!kicked && (event.kind === 'comment' || event.kind === 'gift')) this.players.join(player.platformId, now);
+    // Tim / share / follow của người ĐANG ngồi làm mới thời gian hoạt động (không đưa người mới vào hồ).
+    else if (!kicked) this.players.touch(player.platformId, now);
     // TOP QUÀ TẶNG tính theo kim cương đã tặng.
     if (diamonds > 0) this.players.addDiamonds(event.user.platformId, diamonds);
     if (event.kind === 'gift') {
@@ -314,11 +376,22 @@ export class GameEngine {
       this.stats.giftDiamonds += diamonds;
     }
     this.leaderboardDirty = true;
-    // Quà làm đổi thứ hạng kim cương → xếp lại chỗ ngồi và phát roster NGAY (lên chiếu giữa tức thì, không chờ tick).
-    if (event.kind === 'gift') this.emit({ type: 'roster', data: this.players.roster() });
-    if (event.kind !== 'like') this.contributeCollective(event.user.platformId, now);
-
+    // Quà làm đổi thứ hạng kim cương → nếu Bến Vàng đổi thì phát roster NGAY (lên Bến Vàng tức thì, không chờ tick);
+    // còn lại để flush gom (tránh phát cả roster cho từng món quà khi LIVE đông).
+    if (event.kind === 'gift') this.emitRosterIfFrontChanged();
     const match = matchAction(event, this.config.actions, this.config.gifts);
+    // Người bị mời rời hồ: không góp sức tập thể, không nhận phần chia Cá Thần, không hiện trên overlay.
+    if (kicked) return this.ingestKicked(event, player, match?.action ?? null, now);
+
+    // Sự kiện tập thể chỉ tính tương tác MIỄN PHÍ (bình luận / share / follow): phần thưởng Cá Thần có cân ngẫu nhiên,
+    // nên quà không được góp vào (chính sách TikTok: quà không gắn với kết quả may rủi). Thả tim không tính.
+    // Game dừng → sự kiện tập thể cũng dừng.
+    if (this.active && event.kind !== 'like' && event.kind !== 'gift') this.contributeCollective(event.user.platformId, now);
+
+    if (!this.running && event.kind !== 'gift') {
+      this.record(event, 'game_stopped', null, 'Game đang dừng (vẫn vào hồ / làm mới hoạt động)');
+      return 'game_stopped';
+    }
     if (event.kind === 'comment') {
       // Việc vui và hành động cùng khớp: từ khoá dài hơn (cụ thể hơn) thắng, bằng nhau thì hành động thắng.
       const work = matchWork(event.text, this.config.work ?? []);
@@ -355,7 +428,8 @@ export class GameEngine {
       return 'cooldown';
     }
 
-    const fish = action.fish ? rollBigFish(action.fish, this.random) : undefined;
+    // Quà → cân cố định (không may rủi khi người xem bỏ tiền — chính sách TikTok LIVE về trò may rủi).
+    const fish = action.fish ? (isGift ? fixedBigFish(action.fish) : rollBigFish(action.fish, this.random)) : undefined;
     const outcome = this.enqueue(action, isGift ? action.priority + 100 : action.priority, {
       eventId: event.id,
       source: event.source,
@@ -363,27 +437,62 @@ export class GameEngine {
       detail: describeEvent(event),
       fish
     });
-    if (outcome !== 'accepted') {
+    if (outcome !== 'accepted' && !isGift) {
       this.record(event, outcome, action.id, 'Hàng đợi đầy');
       return outcome;
     }
 
     this.cooldowns.mark(action.id, player.platformId, now);
     this.players.addActionPoints(player.platformId, action.points, action.id);
-    // Cân cá to cộng ngay khi nhận (người tặng đã bỏ tiền — không mất cá nếu hàng đợi bỏ hoạt ảnh).
+    // Cân cá to cộng ngay khi nhận (người tặng đã bỏ tiền — không mất cá kể cả khi hàng đợi đầy / bỏ hoạt ảnh).
     if (fish) {
-      this.players.creditFish(player.platformId, fish.kg, 0);
+      // Cá từ quà không tính vào danh hiệu (không có mốc thưởng cho việc tặng quà).
+      this.players.creditFish(player.platformId, fish.kg, 0, undefined, !isGift);
       this.noteCatch(player.displayName, fish, now, true);
+    }
+    if (outcome !== 'accepted') {
+      // Quà mà hàng đợi hoạt ảnh đầy (toàn quà ưu tiên cao hơn): vẫn cộng cá + điểm, báo lên feed thay cho hoạt ảnh.
+      this.leaderboardDirty = true;
+      this.pushFeed({
+        id: this.newId(),
+        at: now,
+        source: event.source,
+        actorName: event.user.displayName,
+        actorAvatar: event.user.avatarUrl,
+        actionId: action.id,
+        text: fish ? `${action.name}: ${fish.emoji} ${describeFish(fish)}` : action.name
+      });
+      this.record(event, outcome, action.id, `Hàng đợi đầy — bỏ hoạt ảnh, vẫn cộng cá/điểm: ${describeEvent(event)} → ${action.name}${fish ? ` (${describeFish(fish)})` : ''}`);
+      return outcome;
     }
     this.record(event, 'accepted', action.id, `${describeEvent(event)} → ${action.name}${fish ? ` (${describeFish(fish)})` : ''}`);
     this.pump(now);
     return 'accepted';
   }
 
+  /**
+   * Người đang bị admin mời rời hồ: ghi nhận lượt (điểm / kim cương đã cộng ở trên), quà khớp hành động có cá
+   * thì vẫn cộng cân cố định — nhưng KHÔNG hiện gì lên overlay (không chat, việc vui, hoạt ảnh hay feed).
+   */
+  private ingestKicked(event: NormalizedEvent, player: PlayerRecord, action: ActionConfig | null, now: number): EventOutcome {
+    if (event.kind === 'gift' && action && action.enabled) {
+      const fish = action.fish ? fixedBigFish(action.fish) : undefined;
+      this.players.addActionPoints(player.platformId, action.points, action.id);
+      if (fish) {
+        this.players.creditFish(player.platformId, fish.kg, 0, undefined, false);
+        this.noteCatch(player.displayName, fish, now, true);
+      }
+      this.record(event, 'accepted', action.id, `Đang bị mời rời hồ — ghi nhận, không hiện overlay: ${describeEvent(event)}${fish ? ` (${describeFish(fish)})` : ''}`);
+      return 'accepted';
+    }
+    this.record(event, 'filtered', null, `Đang bị mời rời hồ — không hiện overlay: ${describeEvent(event)}`);
+    return 'filtered';
+  }
+
   /** Admin bấm "Test hành động": bỏ qua bật/tắt và cooldown, không cộng điểm / cân cho ai. */
   triggerManual(actionId: string, displayName = 'Admin (test)'): EventOutcome {
     const action = this.config.actions.find((a) => a.id === actionId);
-    if (!action) throw new Error(`Không có hành động ${actionId}`);
+    if (!action) throw new UnknownActionError(`Không có hành động ${actionId}`);
     const now = this.clock.now();
     const user: LiveUser = { platformId: 'manual:admin', username: 'admin', displayName };
     const eventId = `manual:${this.newId()}`;
@@ -408,18 +517,22 @@ export class GameEngine {
   // --------------------------------------------------------------------------
   /** Hồ câu cho admin: người đang ngồi + ai tới lượt cá thường kế tiếp. */
   lakeState(): LakeState {
-    return { roster: this.players.roster(), nextTurnId: this.players.peekNextInTurn(), capacity: this.players.capacity };
+    // Người mới chưa có cá được ưu tiên trước lượt xoay vòng.
+    const nextTurnId = this.players.uncaughtSeated()[0] ?? this.players.peekNextInTurn();
+    return { roster: this.players.roster(), nextTurnId, capacity: this.players.capacity };
   }
 
   /**
-   * Admin mời một người rời hồ (troll, tên phản cảm…). Người đó không tự vào lại bằng bình luận trong
-   * KICK_REJOIN_BLOCK_MS (tặng quà vẫn vào). Trả về false nếu người đó không đang ngồi.
+   * Admin mời một người rời hồ (troll, tên phản cảm…). Người đó không vào lại (bình luận hay tặng quà đều không)
+   * và không hiện tên trên overlay trong KICK_REJOIN_BLOCK_MS. Trả về false nếu người đó không đang ngồi.
    */
   kick(platformId: string): boolean {
     const now = this.clock.now();
     const p = this.players.get(platformId);
     if (!this.players.kick(platformId, now, KICK_REJOIN_BLOCK_MS)) return false;
-    this.emit({ type: 'roster', data: this.players.roster() });
+    const roster = this.players.roster();
+    this.lastFrontKey = frontKey(roster);
+    this.emit({ type: 'roster', data: roster });
     this.recordRaw({
       eventId: `kick:${this.newId()}`,
       source: 'manual',
@@ -489,10 +602,14 @@ export class GameEngine {
     this.king = recover(this.king, this.config.king, dt, now);
     this.broadcastKing(false);
 
-    const c = this.collective.tick(now);
-    if (c) this.emit({ type: 'collective', data: c.state });
+    // Game dừng / LIVE đã kết thúc → câu tự động, cá to định kỳ, sự kiện tập thể (hết hạn / mở vòng) và mời rời hồ
+    // vì ngồi không đều tạm dừng. Hoạt ảnh đang chờ (quà) vẫn chạy tiếp qua pump().
+    if (this.active) {
+      const c = this.collective.tick(now);
+      if (c) this.emit({ type: 'collective', data: c.state });
+    }
 
-    if (this.running) {
+    if (this.active) {
       if (dt > 0) this.stats.activeMs += dt;
       if (this.players.kickIdle(now, this.config.fishing.idleKickMs).length > 0) this.leaderboardDirty = true;
       const tickMs = Math.max(1000, this.config.fishing.tickMs);
@@ -522,16 +639,25 @@ export class GameEngine {
     const seated = this.players.seatedIds();
     if (seated.length === 0) return;
     this.players.addFishingMs(seated, tickMs);
-    const n = Math.min(seated.length, Math.max(1, Math.floor(this.config.fishing.catchesPerTick || 1)));
-    const catches: CatchEvent[] = [];
-    for (let k = 0; k < n; k++) {
+    const n = catchesThisTick(this.config.fishing, seated.length, tickMs);
+    // Người mới vào chưa có con nào được ưu tiên con đầu tiên (trong ngân sách n); phần còn lại xoay vòng.
+    const picked: string[] = this.players.uncaughtSeated().slice(0, n);
+    const chosen = new Set(picked);
+    for (let guard = 0; picked.length < n && guard < seated.length; guard++) {
       const id = this.players.nextInTurn();
       if (!id) break;
+      if (chosen.has(id)) continue;
+      chosen.add(id);
+      picked.push(id);
+    }
+    const catches: CatchEvent[] = [];
+    for (const id of picked) {
       const pick = pickLoot(this.config.fishing.loot, this.random);
       const p = this.players.get(id);
       if (!pick || !p) continue;
       const points = (pick.catch.kg > 0 ? CATCH_BASE_POINTS : 0) + pick.item.points;
       this.players.creditFish(id, pick.catch.kg, points, 'catch');
+      this.players.markCaught(id);
       this.noteCatch(p.displayName, pick.catch, now, false);
       catches.push({ platformId: id, displayName: p.displayName, emoji: pick.catch.emoji, name: pick.catch.name, kg: pick.catch.kg, at: now });
     }
@@ -544,6 +670,7 @@ export class GameEngine {
     const every = this.config.fishing.bigFishEveryMs;
     this.nextBigFishAt = every > 0 ? now + every : 0;
     this.bigFishArmedAt = 0;
+    this.bigFishPostponedSince = 0;
     this.emit({ type: 'bigfish.next', data: { at: this.nextBigFishAt, shadowMs: this.config.fishing.bigFishShadowMs } });
   }
 
@@ -560,24 +687,37 @@ export class GameEngine {
     // Quà luôn được kéo ngay: đang có hoạt ảnh chạy / chờ thì hoãn cá to định kỳ tới khi hàng đợi trống.
     this.bigFishArmedAt = 0;
     const busyUntil = this.busyUntil(now);
+    let overdue = false;
     if (busyUntil > now) {
-      this.nextBigFishAt = busyUntil + BIG_FISH_POSTPONE_GAP_MS;
-      this.emit({ type: 'bigfish.next', data: { at: this.nextBigFishAt, shadowMs: this.config.fishing.bigFishShadowMs } });
-      return;
+      if (this.bigFishPostponedSince === 0) this.bigFishPostponedSince = now;
+      const deadline = this.bigFishPostponedSince + BIG_FISH_MAX_POSTPONE_MS;
+      if (now < deadline) {
+        // Hoãn tới khi hàng đợi trống, nhưng không quá BIG_FISH_MAX_POSTPONE_MS kể từ lần hoãn đầu.
+        this.nextBigFishAt = Math.min(busyUntil + BIG_FISH_POSTPONE_GAP_MS, deadline);
+        this.emit({ type: 'bigfish.next', data: { at: this.nextBigFishAt, shadowMs: this.config.fishing.bigFishShadowMs } });
+        return;
+      }
+      // Quà dồn liên tục đã hoãn quá lâu → chạy ngay sau hoạt ảnh đang chạy (sự kiện miễn phí không bị bỏ đói).
+      overdue = true;
     }
+    this.bigFishPostponedSince = 0;
     const roster = this.players.roster();
     const action = this.config.actions.find((a) => a.id === this.config.fishing.bigFishActionId);
     this.scheduleBigFish(now);
     if (roster.length === 0 || !action || !action.enabled) return;
     // Chọn đều giữa mọi người đang ngồi — chỗ ngồi (do quà quyết định) KHÔNG tăng cơ hội, tránh kiểu "trả tiền để may mắn".
-    const idx = Math.min(roster.length - 1, Math.floor(Math.max(0, this.random()) * roster.length));
-    const winner = roster[idx]!;
+    // Từ 2 người trở lên thì không chọn lại người vừa trúng lần trước.
+    const pool = roster.length >= 2 ? roster.filter((m) => m.platformId !== this.lastBigFishWinner) : roster;
+    const idx = Math.min(pool.length - 1, Math.floor(Math.max(0, this.random()) * pool.length));
+    const winner = pool[idx]!;
     const p = this.players.get(winner.platformId);
     if (!p) return;
+    this.lastBigFishWinner = p.platformId;
     const user: LiveUser = { platformId: p.platformId, username: p.username, displayName: p.displayName, avatarUrl: p.avatarUrl };
     const fish = action.fish ? rollBigFish(action.fish, this.random) : undefined;
     const eventId = `bigfish:${this.newId()}`;
-    const outcome = this.enqueue(action, action.priority, { eventId, source: 'collective', user, detail: action.name, fish });
+    const priority = overdue ? BIG_FISH_OVERDUE_PRIORITY : action.priority;
+    const outcome = this.enqueue(action, priority, { eventId, source: 'collective', user, detail: action.name, fish });
     if (outcome === 'accepted') {
       this.players.addActionPoints(p.platformId, action.points, 'big_fish');
       if (fish) {
@@ -643,7 +783,7 @@ export class GameEngine {
     return 'work';
   }
 
-  /** Nhắc cần thủ tập sự follow / tặng quà — tối đa 1 lần mỗi người mỗi FOLLOW_HINT_MS. */
+  /** Nhắc cần thủ tập sự follow (câu chữ trung tính, không xin quà) — tối đa 1 lần mỗi người mỗi FOLLOW_HINT_MS. */
   private pushFollowHint(event: NormalizedEvent, now: number): void {
     const id = event.user.platformId;
     const last = this.hintAt.get(id);
@@ -729,7 +869,8 @@ export class GameEngine {
     const state = this.collective.current;
     if (res === 'completed' && state) {
       const cfg = this.collective.config;
-      const contributors = this.collective.contributorIds;
+      // Người góp sức rồi bị admin mời rời hồ thì không được danh hiệu / phần chia.
+      const contributors = this.collective.contributorIds.filter((id) => !this.players.isKicked(id, now));
       for (const id of contributors) this.players.grantTitle(id, cfg.rewardTitle);
       const action = this.config.actions.find((a) => a.id === cfg.actionId);
       if (action) {
@@ -762,7 +903,43 @@ export class GameEngine {
         this.pump(now);
       }
     }
-    this.emit({ type: 'collective', data: state });
+    if (res === 'completed') {
+      this.collectiveMsgDirty = false;
+      this.emit({ type: 'collective', data: state });
+    } else {
+      // Tiến trình (mỗi bình luận +1) gom vào flush — LIVE đông không phát một tin cho từng bình luận.
+      this.collectiveMsgDirty = true;
+      this.flush(now, false);
+    }
+  }
+
+  /** Phát roster ngay khi danh sách / thứ tự Bến Vàng đổi (quà vừa đẩy ai đó lên); còn lại chờ flush. */
+  private emitRosterIfFrontChanged(): void {
+    const roster = this.players.roster();
+    const key = frontKey(roster);
+    if (key === this.lastFrontKey) return;
+    this.lastFrontKey = key;
+    this.emit({ type: 'roster', data: roster });
+  }
+
+  /**
+   * Bỏ mọi dấu vết người chơi demo khỏi phiên (khi chuyển sang TikTok LIVE thật): rời hồ, khỏi bảng phiên,
+   * hoạt ảnh đang chờ của họ, và mở lại vòng tập thể nếu có lượt góp demo. Trả về số người demo đã gỡ.
+   */
+  purgeDemo(): number {
+    const now = this.clock.now();
+    const removed = this.players.purge(isDemoPlayer);
+    const dropped = this.queue.removeWhere((it) => !!it.payload.user && isDemoPlayer(it.payload.user.platformId));
+    if (this.collective.contributorIds.some(isDemoPlayer)) {
+      this.collective.reset(now);
+      this.emit({ type: 'collective', data: this.collective.current });
+    }
+    if (removed === 0 && dropped.length === 0) return 0;
+    this.lastFrontKey = null;
+    this.leaderboardDirty = true;
+    this.emit({ type: 'queue', data: { length: this.queue.length } });
+    this.flush(now, true);
+    return removed;
   }
 
   private broadcastKing(force: boolean): void {
@@ -782,8 +959,12 @@ export class GameEngine {
   /** Gom các cập nhật leaderboard/feed/roster, tối đa 1 lần mỗi broadcastIntervalMs. */
   private flush(now: number, force: boolean): void {
     if (!force && now - this.lastFlushAt < this.broadcastIntervalMs) return;
-    if (!this.feedDirty && !this.leaderboardDirty) return;
+    if (!this.feedDirty && !this.leaderboardDirty && !this.collectiveMsgDirty) return;
     this.lastFlushAt = now;
+    if (this.collectiveMsgDirty) {
+      this.collectiveMsgDirty = false;
+      this.emit({ type: 'collective', data: this.collective.current });
+    }
     if (this.feedDirty) {
       this.feedDirty = false;
       this.emit({ type: 'feed', data: this.feed.slice(0, 10) });
@@ -798,7 +979,9 @@ export class GameEngine {
           participants: this.players.participants()
         }
       });
-      this.emit({ type: 'roster', data: this.players.roster() });
+      const roster = this.players.roster();
+      this.lastFrontKey = frontKey(roster);
+      this.emit({ type: 'roster', data: roster });
     }
   }
 
@@ -853,6 +1036,7 @@ export class GameEngine {
   snapshot(): GameSnapshot {
     return {
       running: this.running,
+      streamOffline: this.streamOffline,
       sessionId: this.sessionId,
       king: { ...this.king },
       runningActions: this.scheduler.list(),
@@ -874,7 +1058,45 @@ export class GameEngine {
   loadPlayers(records: PlayerRecord[]): void {
     this.players.load(records);
   }
+
+  /**
+   * Sau khi khởi động lại: gắn lại phiên LIVE đang mở và bộ đếm phiên đã lưu (game vẫn dừng — host quyết định
+   * có chạy tiếp không). Người ngồi trong hồ không được khôi phục (chỉ có trong bộ nhớ).
+   */
+  restoreSession(sessionId: string, stats: readonly { playerId: string; stat: SessionStat }[]): void {
+    this.sessionId = sessionId;
+    this.players.loadSession(stats);
+    this.leaderboardDirty = true;
+  }
+
+  /** Mốc sự kiện LIVE hợp lệ gần nhất được xử lý (0 = chưa có) — để quyết định tự chạy lại sau khi khởi động. */
+  get lastActivityAt(): number {
+    return this.lastEventAt;
+  }
 }
+
+/**
+ * Số cá thường mỗi chu kỳ: clamp(ceil(N × tickMs / targetCatchMs), catchesPerTick, maxCatchesPerTick), không quá N.
+ * Hồ càng đông càng nhiều cá mỗi chu kỳ để mỗi người vẫn được cá khoảng mỗi `targetCatchMs`.
+ */
+export function catchesThisTick(f: FishingConfig, seated: number, tickMs: number): number {
+  if (seated <= 0) return 0;
+  const target = f.targetCatchMs && f.targetCatchMs > 0 ? f.targetCatchMs : DEFAULT_TARGET_CATCH_MS;
+  const min = Math.max(1, Math.floor(f.catchesPerTick || 1));
+  const max = Math.max(min, Math.floor(f.maxCatchesPerTick && f.maxCatchesPerTick > 0 ? f.maxCatchesPerTick : DEFAULT_MAX_CATCHES_PER_TICK));
+  const want = Math.ceil((seated * tickMs) / target);
+  return Math.min(seated, Math.max(min, Math.min(max, want)));
+}
+
+/** Admin gọi một hành động không tồn tại (HTTP 404). */
+export class UnknownActionError extends Error {}
+
+/** Khoá so sánh danh sách + thứ tự Bến Vàng. */
+const frontKey = (roster: readonly RosterMember[]): string =>
+  roster
+    .filter((m) => m.seat === 'front')
+    .map((m) => m.platformId)
+    .join('\u0000');
 
 const describeFish = (f: Catch) => (f.kg > 0 ? `${f.name} ${formatKg(f.kg)}kg` : f.name);
 

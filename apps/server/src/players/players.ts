@@ -39,7 +39,9 @@ interface Presence {
   /** Mốc thời gian (ms) của lần bình luận / tặng quà gần nhất — để mời rời hồ khi ngồi không quá lâu. */
   lastSeenAt: number;
   fishingMs: number;
-  /** Bờ đã gán (giữ nguyên khi vào/ra chiếu giữa; chỉ đổi khi cần cân lại hai bờ). */
+  /** Số con câu tự động đã được trong lần ngồi này (0 = người mới, được ưu tiên con đầu tiên). */
+  catches: number;
+  /** Bờ đã gán (giữ nguyên khi vào/ra Bến Vàng; chỉ đổi khi cần cân lại hai bờ). */
   side: 'left' | 'right';
 }
 
@@ -53,24 +55,24 @@ export const TITLES: Record<PlayerTitle['id'], string> = {
 
 /** Số con câu tự động để thành "Cần thủ chăm chỉ". */
 export const ANGLER_MIN_CATCHES = 20;
-/** Số lượt hành động quà để thành "Kẻ phá hồ". */
-export const TROLL_MIN_ACTIONS = 10;
-
-/** Khoá trong actionCounts không phải lượt hành động quà. */
-const NON_ACTION_KEYS = new Set(['catch', 'big_catch', 'big_fish']);
+/**
+ * Số lượt việc vui bằng bình luận (`work:*`, miễn phí) để thành "Kẻ phá hồ".
+ * KHÔNG tính lượt quà: danh hiệu không được là mốc thưởng cho việc tặng quà (chính sách TikTok LIVE).
+ */
+export const TROLL_MIN_WORK = 30;
 /** Danh hiệu tập thể của bản cũ → danh hiệu mới. */
 const LEGACY_GRANTED: Record<string, string> = { 'Nhân viên chống đối': TITLES.king_hunter };
 
 /**
  * Danh hiệu, suy ra từ thống kê (không nhập tay). Thứ tự ưu tiên:
- * Kẻ phá hồ (≥ 10 lượt quà) → danh hiệu tập thể (Kẻ săn Cá Thần) → Sát thủ cá to (từng có con ≥ 10 kg)
+ * Kẻ phá hồ (≥ 30 lượt việc vui bằng bình luận) → danh hiệu tập thể (Kẻ săn Cá Thần) → Sát thủ cá to (từng có con ≥ 10 kg)
  * → Cần thủ chăm chỉ (≥ 20 con) → Cần thủ tập sự.
  */
 export function computeTitle(p: Pick<PlayerRecord, 'actionCounts' | 'grantedTitles'>): string {
   const c = p.actionCounts;
-  let gifts = 0;
-  for (const [k, v] of Object.entries(c)) if (!k.startsWith('work:') && !NON_ACTION_KEYS.has(k)) gifts += v;
-  if (gifts >= TROLL_MIN_ACTIONS) return TITLES.troll;
+  let work = 0;
+  for (const [k, v] of Object.entries(c)) if (k.startsWith('work:')) work += v;
+  if (work >= TROLL_MIN_WORK) return TITLES.troll;
   if (p.grantedTitles.length > 0) {
     const t = p.grantedTitles[p.grantedTitles.length - 1]!;
     return LEGACY_GRANTED[t] ?? t;
@@ -81,6 +83,24 @@ export function computeTitle(p: Pick<PlayerRecord, 'actionCounts' | 'grantedTitl
 }
 
 export const isDemoPlayer = (platformId: string) => platformId.startsWith('demo:');
+
+/**
+ * `limit` phần tử đầu theo `cmp` (ổn định như sort: hoà giữ thứ tự gốc) mà không sắp xếp cả mảng —
+ * bảng xếp hạng phát ~4 lần/giây, phiên chạy dài có thể có hàng chục nghìn người tham gia.
+ */
+export function topK<T>(rows: readonly T[], cmp: (a: T, b: T) => number, limit: number): T[] {
+  if (limit <= 0) return [];
+  if (rows.length <= limit * 4) return [...rows].sort(cmp).slice(0, limit);
+  const top: T[] = [];
+  for (const r of rows) {
+    if (top.length === limit && cmp(r, top[limit - 1]!) >= 0) continue;
+    let i = top.length;
+    while (i > 0 && cmp(r, top[i - 1]!) < 0) i--;
+    top.splice(i, 0, r);
+    if (top.length > limit) top.pop();
+  }
+  return top;
+}
 
 /** Băm FNV-1a 32 bit — chia bờ trái / phải ổn định theo ID. */
 export function sideFor(platformId: string): 'left' | 'right' {
@@ -106,7 +126,7 @@ export class PlayerRegistry {
   private joinSeq = 0;
   /** Thứ tự vào hồ của người vừa được cá thường (con trỏ xoay vòng). */
   private turnSeq = 0;
-  /** Số ghế chiếu giữa (engine cập nhật theo `fishing.frontSeats`). */
+  /** Số ghế Bến Vàng (engine cập nhật theo `fishing.frontSeats`). */
   frontSeats = 5;
   /** Sức chứa của hồ (mặc định ROSTER_MAX; test có thể hạ xuống). */
   capacity = ROSTER_MAX;
@@ -115,6 +135,17 @@ export class PlayerRegistry {
 
   load(records: PlayerRecord[]): void {
     for (const r of records) this.players.set(r.platformId, { ...r });
+  }
+
+  /**
+   * Nạp lại thống kê phiên đang mở sau khi khởi động lại (bộ đếm phiên tiếp tục từ giá trị đã lưu, không từ 0 —
+   * nếu không, lần lưu kế tiếp sẽ ghi đè số liệu phiên trong DB bằng số nhỏ hơn). Bỏ qua người không có trong bảng cần thủ.
+   */
+  loadSession(stats: readonly { playerId: string; stat: SessionStat }[]): void {
+    for (const { playerId, stat } of stats) {
+      if (!this.players.has(playerId)) continue;
+      this.session.set(playerId, { ...stat });
+    }
   }
 
   /** Ghi nhận một lượt tham gia (thống kê). Không tự đưa vào hồ — xem `join`. */
@@ -133,28 +164,35 @@ export class PlayerRegistry {
   }
 
   /**
-   * Bình luận / tặng quà: vào hồ (hoặc làm mới thời điểm hoạt động nếu đã ngồi).
+   * Bình luận / tặng quà: vào hồ (hoặc làm mới thời điểm hoạt động nếu đã ngồi). Một món quà = một lượt hoạt động,
+   * như một bình luận.
    * Hồ đầy (`ROSTER_MAX`) → người lâu không hoạt động nhất rời hồ, người mới ngồi vào. Trả về id người phải rời (nếu có).
    */
-  join(platformId: string, now: number, viaGift = false): string | null {
+  join(platformId: string, now: number): string | null {
     if (!this.players.has(platformId)) return null;
     let evicted: string | null = null;
     let pr = this.presence.get(platformId);
     if (!pr) {
-      const until = this.kickedUntil.get(platformId);
-      if (until !== undefined) {
-        if (!viaGift && now < until) return null;
-        this.kickedUntil.delete(platformId);
-      }
+      // Bị admin mời rời hồ: chặn vào lại cho tới hết hạn — kể cả khi tặng quà (quà không mua được việc bỏ qua kiểm duyệt).
+      if (this.isKicked(platformId, now)) return null;
+      this.kickedUntil.delete(platformId);
       if (this.presence.size >= this.capacity) {
+        // Người lâu không hoạt động nhất rời chỗ — ưu tiên người ĐÃ được ít nhất một con cá (người mới vào chưa kịp
+        // câu không bị đẩy ra trắng tay). Một món quà chỉ tính là MỘT lượt hoạt động như một bình luận —
+        // không giữ chỗ lâu hơn, không được ưu tiên (chính sách: quà không mua lợi thế giữ chỗ).
         let oldest: [string, Presence] | null = null;
-        for (const e of this.presence) if (!oldest || e[1].lastActive < oldest[1].lastActive) oldest = e;
+        let oldestCaught: [string, Presence] | null = null;
+        for (const e of this.presence) {
+          if (!oldest || e[1].lastActive < oldest[1].lastActive) oldest = e;
+          if (e[1].catches > 0 && (!oldestCaught || e[1].lastActive < oldestCaught[1].lastActive)) oldestCaught = e;
+        }
+        oldest = oldestCaught ?? oldest;
         if (oldest) {
           this.presence.delete(oldest[0]);
           evicted = oldest[0];
         }
       }
-      pr = { joinSeq: ++this.joinSeq, lastActive: 0, lastSeenAt: now, fishingMs: 0, side: this.emptierSide(platformId) };
+      pr = { joinSeq: ++this.joinSeq, lastActive: 0, lastSeenAt: now, fishingMs: 0, catches: 0, side: this.emptierSide(platformId) };
       this.presence.set(platformId, pr);
     }
     pr.lastActive = ++this.activeSeq;
@@ -173,6 +211,8 @@ export class PlayerRegistry {
 
   /** Mời rời hồ những người không bình luận / tặng quà quá `idleMs` (0 = không bao giờ). Trả về id đã rời. */
   kickIdle(now: number, idleMs: number): string[] {
+    // Dọn mốc chặn vào lại đã hết hạn (không để map phình khi chạy 24/7 không reset phiên).
+    for (const [id, until] of this.kickedUntil) if (now >= until) this.kickedUntil.delete(id);
     if (!(idleMs > 0)) return [];
     const out: string[] = [];
     for (const [id, pr] of this.presence) {
@@ -185,13 +225,38 @@ export class PlayerRegistry {
   }
 
   /**
-   * Admin mời một người rời hồ. Trong `blockMs` tới người đó không tự vào lại bằng bình luận
-   * (tặng quà thì vẫn vào — quà luôn được xử lý). Trả về false nếu người đó không đang ngồi.
+   * Admin mời một người rời hồ. Trong `blockMs` tới người đó không vào lại hồ (bình luận hay tặng quà đều không;
+   * quà vẫn được ghi nhận điểm/cân nhưng không hiện tên lên overlay). Trả về false nếu người đó không đang ngồi.
    */
   kick(platformId: string, now: number, blockMs: number): boolean {
     if (!this.presence.delete(platformId)) return false;
     if (blockMs > 0) this.kickedUntil.set(platformId, now + blockMs);
     return true;
+  }
+
+  /** Đang trong thời gian bị admin mời rời hồ. */
+  isKicked(platformId: string, now: number): boolean {
+    const until = this.kickedUntil.get(platformId);
+    return until !== undefined && now < until;
+  }
+
+  /**
+   * Gỡ hẳn những người thoả `pred` khỏi phiên: rời hồ, khỏi bảng phiên, follow, chặn, và khỏi bộ nhớ
+   * (dùng để xoá người chơi demo khi chuyển sang LIVE thật). Trả về số người đã gỡ.
+   */
+  purge(pred: (platformId: string) => boolean): number {
+    let n = 0;
+    for (const id of [...this.players.keys()]) {
+      if (!pred(id)) continue;
+      this.players.delete(id);
+      this.session.delete(id);
+      this.presence.delete(id);
+      this.followers.delete(id);
+      this.kickedUntil.delete(id);
+      this.dirty.delete(id);
+      n++;
+    }
+    return n;
   }
 
   /** Người sẽ tới lượt cá thường ở chu kỳ tới (không dịch con trỏ). */
@@ -242,6 +307,37 @@ export class PlayerRegistry {
     return id;
   }
 
+  /** Người đang ngồi chưa được con cá nào (theo thứ tự vào hồ) — được ưu tiên con đầu tiên ở chu kỳ kế. */
+  uncaughtSeated(): string[] {
+    return [...this.presence.entries()]
+      .filter(([, pr]) => pr.catches === 0)
+      .sort((a, b) => a[1].joinSeq - b[1].joinSeq)
+      .map(([id]) => id);
+  }
+
+  /** Ghi nhận một con câu tự động cho người đang ngồi. */
+  markCaught(platformId: string): void {
+    const pr = this.presence.get(platformId);
+    if (pr) pr.catches += 1;
+  }
+
+  /**
+   * Tim / share / follow của người ĐANG ngồi: làm mới thời gian hoạt động (không mời rời hồ vì ngồi không).
+   * Không đưa người mới vào hồ. Trả về true nếu người đó đang ngồi.
+   */
+  touch(platformId: string, now: number): boolean {
+    const pr = this.presence.get(platformId);
+    if (!pr) return false;
+    pr.lastActive = ++this.activeSeq;
+    pr.lastSeenAt = now;
+    return true;
+  }
+
+  /** Làm mới mốc hoạt động của mọi người đang ngồi (khi LIVE quay lại sau lúc tạm dừng — không mời rời hồ oan). */
+  refreshSeen(now: number): void {
+    for (const pr of this.presence.values()) pr.lastSeenAt = now;
+  }
+
   /** Cộng thời gian ngồi câu cho những người đang ngồi. */
   addFishingMs(ids: readonly string[], ms: number): void {
     for (const id of ids) {
@@ -252,9 +348,9 @@ export class PlayerRegistry {
 
   /**
    * Danh sách chỗ ngồi quanh hồ. `frontSeats` người tặng quà nhiều nhất trong phiên (hoà: câu lâu hơn,
-   * rồi vào hồ trước) ngồi chiếu giữa; còn lại chia đều hai bờ — mỗi người giữ bờ đã gán, chỉ khi hai bờ
+   * rồi vào hồ trước) ngồi Bến Vàng; còn lại chia đều hai bờ — mỗi người giữ bờ đã gán, chỉ khi hai bờ
    * lệch nhau quá 1 người thì người vào hồ muộn nhất ở bờ đông được chuyển sang bờ vắng.
-   * Chiếu giữa đứng đầu danh sách theo thứ hạng, sau đó là hai bờ theo thứ tự vào hồ.
+   * Bến Vàng đứng đầu danh sách theo thứ hạng, sau đó là hai bờ theo thứ tự vào hồ.
    */
   roster(): RosterMember[] {
     const seated = this.seated();
@@ -305,14 +401,15 @@ export class PlayerRegistry {
    * Cộng một con cá (câu tự động, kéo cá to, phần chia Cá Thần): cân + điểm, tăng bộ đếm `countKey` (nếu có)
    * và `big_catch` khi con cá ≥ BIG_CATCH_KG.
    */
-  creditFish(platformId: string, kg: number, points: number, countKey?: string): void {
+  creditFish(platformId: string, kg: number, points: number, countKey?: string, countsForTitle = true): void {
     const p = this.players.get(platformId);
     if (!p) return;
     const grams = kgToGrams(kg);
     p.totalGrams = (p.totalGrams ?? 0) + grams;
     p.totalPoints += points;
     if (countKey) p.actionCounts[countKey] = (p.actionCounts[countKey] ?? 0) + 1;
-    if (kg >= BIG_CATCH_KG) p.actionCounts.big_catch = (p.actionCounts.big_catch ?? 0) + 1;
+    // Cá từ quà (`countsForTitle = false`) không tính vào danh hiệu "Sát thủ cá to" — danh hiệu không là mốc thưởng cho quà.
+    if (countsForTitle && kg >= BIG_CATCH_KG) p.actionCounts.big_catch = (p.actionCounts.big_catch ?? 0) + 1;
     const s = this.sessionOf(platformId);
     s.grams += grams;
     s.points += points;
@@ -366,7 +463,9 @@ export class PlayerRegistry {
             diamonds: p.totalDiamonds ?? 0,
             grams: p.totalGrams ?? 0
           }));
-    return rows.filter((r) => r.p && (scope === 'session' || !isDemoPlayer(r.p.platformId)));
+    // Bảng phiên (lên overlay) ẩn người đang bị admin mời rời hồ (mốc hết hạn được dọn mỗi tick trong kickIdle);
+    // bảng toàn thời gian bỏ người chơi demo.
+    return rows.filter((r) => r.p && (scope === 'session' ? !this.kickedUntil.has(r.p.platformId) : !isDemoPlayer(r.p.platformId)));
   }
 
   private entries(rows: ReturnType<PlayerRegistry['rows']>, limit: number): LeaderboardEntry[] {
@@ -385,17 +484,21 @@ export class PlayerRegistry {
 
   /** TOP QUÀ TẶNG: kim cương đã tặng giảm dần, rồi điểm, rồi số lượt tham gia. */
   leaderboard(scope: 'session' | 'total', limit = 10): LeaderboardEntry[] {
-    const rows = this.rows(scope).sort(
-      (a, b) => b.diamonds - a.diamonds || b.points - a.points || b.participations - a.participations
+    const rows = topK(
+      this.rows(scope),
+      (a, b) => b.diamonds - a.diamonds || b.points - a.points || b.participations - a.participations,
+      limit
     );
     return this.entries(rows, limit);
   }
 
   /** BẢNG CÂN CÁ: tổng cân giảm dần (chỉ người đã có cá), rồi điểm, rồi số lượt tham gia. */
   kgBoard(scope: 'session' | 'total', limit = 10): LeaderboardEntry[] {
-    const rows = this.rows(scope)
-      .filter((r) => r.grams > 0)
-      .sort((a, b) => b.grams - a.grams || b.points - a.points || b.participations - a.participations);
+    const rows = topK(
+      this.rows(scope).filter((r) => r.grams > 0),
+      (a, b) => b.grams - a.grams || b.points - a.points || b.participations - a.participations,
+      limit
+    );
     return this.entries(rows, limit);
   }
 

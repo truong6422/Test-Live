@@ -1,7 +1,8 @@
 import { Application } from 'pixi.js';
-import type { CatchEvent, LeaderboardEntry, RosterMember, RunningAction, ServerMessage, WorkEvent } from '@cau/shared';
+import { demoNames, type CatchEvent, type LeaderboardEntry, type RosterMember, type RunningAction, type ServerMessage, type WorkEvent } from '@cau/shared';
 import { Hud } from './hud';
 import { ANIMATIONS, PREVIEW_DURATIONS } from './scene/animations';
+import { bankEdge } from './scene/angler';
 import { loadAssets } from './scene/assets';
 import { Director } from './scene/director';
 import { buildLake } from './scene/lake';
@@ -40,7 +41,34 @@ function updateShadow(): void {
 }
 setInterval(updateShadow, 500);
 
+/**
+ * Biển "Bình luận để vào câu" giữa hồ: chỉ khi hồ gần như trống (≤ 2 người ngồi), không có hoạt ảnh kéo cá,
+ * hồ đang chạy và LIVE đang phát (tạm dừng / LIVE tắt thì mời bình luận cũng vô ích).
+ */
+const CTA_MAX_SEATED = 2;
+const cta = { roster: 0, running: new Set<string>(), paused: false, offline: false };
+const updateCta = () => hud.joinCta(cta.roster <= CTA_MAX_SEATED && cta.running.size === 0 && !cta.paused && !cta.offline);
+
 app.ticker.add((t) => director.tick(t.deltaMS));
+
+/**
+ * Xếp lại chỗ ngồi; hồ đông thì mặt nước hẹp lại (cầu ván hai bờ) → thanh "Cả hồ kéo" ở cuối hồ co theo bề ngang
+ * mặt nước để không đè lên người ngồi hai bờ. Chỉ đổi style khi bề ngang đổi.
+ */
+let waterSig = '';
+function syncRoster(roster: RosterMember[]): void {
+  scene.anglers.sync(roster);
+  const y = 1460;
+  const l = Math.round(bankEdge('left', y)) + 10;
+  const r = Math.round(bankEdge('right', y)) - 10;
+  const sig = `${l}|${r}`;
+  if (sig === waterSig) return;
+  waterSig = sig;
+  const box = document.getElementById('collective')!;
+  box.style.left = `${(l + r) / 2}px`;
+  box.style.width = `${Math.min(640, r - l)}px`;
+  box.classList.toggle('narrow', r - l < 560);
+}
 
 function handle(msg: ServerMessage): void {
   switch (msg.type) {
@@ -48,24 +76,32 @@ function handle(msg: ServerMessage): void {
       const s = msg.data;
       director.syncClock(s.serverTime);
       bigFish.clockOffset = s.serverTime - Date.now();
-      scene.anglers.sync(s.roster ?? []);
+      syncRoster(s.roster ?? []);
       director.reset(s.runningActions);
+      cta.roster = (s.roster ?? []).length;
+      cta.running = new Set(s.runningActions.map((r) => r.runId));
+      cta.paused = !s.running;
+      cta.offline = !!s.streamOffline;
+      updateCta();
       director.setMood(s.king.mood);
       hud.feed(s.feed);
       hud.leaderboard(s.leaderboard, s.participants, s.kgBoard ?? []);
       hud.collective(s.collective);
       hud.connectors(s.connectors);
       hud.running(s.running);
+      hud.streamOffline(!!s.streamOffline);
       bigFish.at = s.nextBigFishAt ?? 0;
       bigFish.shadowMs = s.bigFishShadowMs ?? 0;
       bigFish.active = s.runningActions.some((r) => r.actionId === 'big_fish_event');
-      hud.bigFishNext(bigFish.at);
+      hud.bigFishNext(bigFish.at, bigFish.clockOffset);
       updateShadow();
       break;
     }
     case 'action.started':
       director.start(msg.data);
       hud.actionStarted(msg.data);
+      cta.running.add(msg.data.runId);
+      updateCta();
       if (msg.data.actionId === 'big_fish_event') {
         bigFish.active = true;
         updateShadow();
@@ -73,6 +109,8 @@ function handle(msg: ServerMessage): void {
       break;
     case 'action.ended':
       director.end(msg.data.runId);
+      cta.running.delete(msg.data.runId);
+      updateCta();
       if (msg.data.actionId === 'big_fish_event') bigFish.active = false;
       break;
     case 'king':
@@ -85,7 +123,9 @@ function handle(msg: ServerMessage): void {
       hud.leaderboard(msg.data.entries, msg.data.participants, msg.data.kgBoard ?? []);
       break;
     case 'roster':
-      scene.anglers.sync(msg.data);
+      syncRoster(msg.data);
+      cta.roster = msg.data.length;
+      updateCta();
       break;
     case 'catches':
       scene.anglers.catches(msg.data);
@@ -93,7 +133,7 @@ function handle(msg: ServerMessage): void {
     case 'bigfish.next':
       bigFish.at = msg.data.at;
       bigFish.shadowMs = msg.data.shadowMs ?? 0;
-      hud.bigFishNext(msg.data.at);
+      hud.bigFishNext(msg.data.at, bigFish.clockOffset);
       updateShadow();
       break;
     case 'work':
@@ -110,6 +150,13 @@ function handle(msg: ServerMessage): void {
       break;
     case 'game':
       hud.running(msg.data.running);
+      cta.paused = !msg.data.running;
+      // trường mới, có thể thiếu ở server cũ: thiếu thì giữ trạng thái đang có
+      if (msg.data.streamOffline !== undefined) {
+        cta.offline = msg.data.streamOffline;
+        hud.streamOffline(cta.offline);
+      }
+      updateCta();
       break;
   }
 }
@@ -118,9 +165,9 @@ function handle(msg: ServerMessage): void {
 function connect(key: string, attempt = 0): void {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/overlay?key=${encodeURIComponent(key)}`);
-  let opened = false;
+  let openedAt = 0;
   ws.onopen = () => {
-    opened = true;
+    openedAt = Date.now();
     hud.connection(true);
   };
   ws.onmessage = (ev) => {
@@ -132,8 +179,12 @@ function connect(key: string, attempt = 0): void {
   };
   ws.onclose = () => {
     hud.connection(false);
-    const next = opened ? 0 : attempt + 1;
-    setTimeout(() => connect(key, next), Math.min(15_000, 1000 * 2 ** next));
+    ws.onopen = ws.onmessage = ws.onclose = null;
+    // Chỉ coi là "đã kết nối ổn" nếu giữ được ≥ 10 giây; server nhận rồi đóng ngay (sai key, đang khởi động lại)
+    // thì vẫn lùi dần, không gõ cửa mỗi giây suốt nhiều giờ live.
+    const stable = openedAt > 0 && Date.now() - openedAt >= 10_000;
+    const next = stable ? 0 : attempt + 1;
+    setTimeout(() => connect(key, next), Math.min(15_000, 1000 * 2 ** Math.min(next, 4)));
   };
 }
 
@@ -141,7 +192,9 @@ function connect(key: string, attempt = 0): void {
  * Chế độ xem trước hoạt ảnh không cần server (chỉ để dựng/kiểm tra giao diện):
  *   /overlay/?preview=all              chạy lần lượt mọi hoạt ảnh kéo cá
  *   /overlay/?preview=pull_legend      một hoạt ảnh
+ *   /overlay/?preview=idle             chỉ câu thường + chat, không kéo cá to
  *   &people=50                         số cần thủ giả để thử bố cục (mặc định 20)
+ *   &state=paused | offline            thử dải "tạm dừng" / "LIVE tạm nghỉ"
  */
 /** Tên + cá + khoảng cân của từng hành động (khớp defaults.ts của server) — chỉ dùng cho xem trước. */
 const PREVIEW_INFO: Record<string, { name: string; emoji: string; fish: string; min: number; max: number }> = {
@@ -172,13 +225,22 @@ const PREVIEW_LOOT: [string, string, number, number, number][] = [
 ];
 const kgIn = (a: number, b: number) => Math.round((a + Math.random() * (b - a)) * 10) / 10;
 
+/** Tên kiểu tài khoản TikTok cho bản xem trước (nhãn DEMO vẫn hiện). */
+const PREVIEW_NAMES = demoNames(120);
+
 function preview(which: string): void {
   hud.connection(true);
-  hud.running(true);
+  // dữ liệu giả lập: luôn gắn nhãn DEMO (kể cả khi lỡ đưa link xem trước vào OBS)
+  hud.connectors({ tiktok: { status: 'disconnected' }, demo: { running: true } } as Parameters<Hud['connectors']>[0]);
+  const state = params.get('state');
+  hud.running(state !== 'paused');
+  hud.streamOffline(state === 'offline');
+  cta.paused = state === 'paused';
+  cta.offline = state === 'offline';
   const people = Math.max(0, Math.min(50, Number(params.get('people') ?? 20) || 0));
   const roster: RosterMember[] = Array.from({ length: people }, (_, i) => ({
     platformId: `preview:${i}`,
-    displayName: `Cần thủ ${i + 1}`,
+    displayName: PREVIEW_NAMES[i]!,
     follower: i % 3 !== 0,
     points: 0,
     seat: i < 5 ? 'front' : i % 2 ? 'left' : 'right',
@@ -186,7 +248,9 @@ function preview(which: string): void {
     fishingMs: 0,
     diamonds: 0
   }));
-  scene.anglers.sync(roster);
+  syncRoster(roster);
+  cta.roster = roster.length;
+  updateCta();
 
   const ids = which === 'all' ? Object.keys(ANIMATIONS) : [which];
   let i = 0;
@@ -234,7 +298,28 @@ function preview(which: string): void {
     i += 1;
     setTimeout(loop, run.durationMs + 1500);
   };
-  loop();
+  if (which !== 'idle') loop(); // idle: không kéo cá to (để thử biển "Bình luận để vào câu")
+  else {
+    // cứ 4 giây có một người xem mới bình luận → vào hồ (thử lời chào + bảng tên nảy sáng)
+    let joined = 0;
+    setInterval(() => {
+      if (roster.length >= 50) return;
+      joined += 1;
+      roster.push({
+        platformId: `preview:new${joined}`,
+        displayName: PREVIEW_NAMES[people + joined - 1] ?? `user${9000000 + joined}`,
+        follower: joined % 2 === 0,
+        points: 0,
+        seat: joined % 2 ? 'left' : 'right',
+        kg: 0,
+        fishingMs: 0,
+        diamonds: 0
+      });
+      syncRoster(roster);
+      cta.roster = roster.length;
+      updateCta();
+    }, 4000);
+  }
 
   // Câu tự động: mỗi 5 giây một người (theo thứ tự vào hồ) lên một con cá.
   const totalW = PREVIEW_LOOT.reduce((a, l) => a + l[2], 0);

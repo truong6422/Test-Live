@@ -27,7 +27,8 @@ export function BlocklistPage({ config, run, reloadConfig }: { config: GameConfi
   const [result, setResult] = useState<{ comment: string; displayName: string } | null>(null);
   const [testErr, setTestErr] = useState('');
 
-  useEffect(() => setWords(config.blocklist ?? []), [config.blocklist]);
+  // So theo NỘI DUNG (không theo tham chiếu): reloadConfig sau khi lưu trang khác tạo object mới → không được xoá phần đang sửa dở ở trang này.
+  useEffect(() => setWords(config.blocklist ?? []), [JSON.stringify(config.blocklist ?? [])]);
 
   const dirty = words.length !== saved.length || words.some((w, i) => w !== saved[i]);
 

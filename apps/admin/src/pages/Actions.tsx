@@ -3,6 +3,7 @@ import type { ActionConfig, GameConfig, Lane } from '@cau/shared';
 import { api, type ActionPatch } from '../api';
 import type { Run } from '../App';
 import { FishThumb } from '../components/FishSprite';
+import { FIXED_GIFT_HINT, fmtKgVi, giftKg, randomUses } from '../fishWeight';
 
 const LANE_LABELS: Record<Lane, string> = {
   king: 'Cá Thần',
@@ -16,25 +17,40 @@ const LANE_LABELS: Record<Lane, string> = {
 export function ActionsPage({ config, run, reloadConfig }: { config: GameConfig; run: Run; reloadConfig: () => Promise<void> }) {
   return (
     <div className="stack">
-      <h1>Hành động</h1>
+      <h1>Cá to (quà)</h1>
       <p className="muted">
-        <b>Kéo cá to bằng quà tặng</b>: mỗi hành động được kích hoạt theo giá trị quà (kim cương) ở trang <b>Quà tặng</b>; người tặng kéo
-        ngay một con <b>cá to</b> (loài + khoảng cân bên dưới; server bốc cân rồi cộng kg cho người đó). Hành động cho cá to định kỳ chọn ở
-        tab <b>Câu cá</b>. Quà tặng không bị chặn bởi cooldown nhưng vẫn xếp hàng đợi. Lane: hai hành động dùng chung lane không chạy cùng
-        lúc. <b>Tác động Cá Thần</b> (bình thản / sức bền) server vẫn tính nhưng không còn hiện trên HUD.
+        <b>Kéo cá to bằng quà tặng</b>: mỗi hành động được kích hoạt theo giá trị quà (kim cương) ở tab <b>Bảng quà</b>; người tặng kéo
+        ngay một con <b>cá to</b> và được cộng kg. Hành động cho cá to định kỳ chọn ở tab <b>Câu tự động</b>. Quà tặng không bị chặn bởi
+        cooldown nhưng vẫn xếp hàng đợi. Lane: hai hành động dùng chung lane không chạy cùng lúc. <b>Tác động Cá Thần</b> (bình thản / sức
+        bền) server vẫn tính nhưng không còn hiện trên HUD.
       </p>
+      <div className="alert info">
+        <b>Cân cá khi có quà luôn CỐ ĐỊNH</b> = giữa khoảng "Kg từ – Kg đến" (làm tròn 0,1 kg). {FIXED_GIFT_HINT} Chỉ{' '}
+        <b>cá to định kỳ</b> (miễn phí) và <b>sự kiện tập thể</b> mới bốc cân ngẫu nhiên trong khoảng.
+      </div>
       <p className="muted">
         Nếu muốn bật lại kích hoạt bằng bình luận cho một hành động: điền từ khoá (so khớp không dấu, theo nguyên từ). <b>Chỉ người đã
         follow:</b> bật thì chỉ cần thủ chính thức (đã follow) mới kích hoạt được bằng bình luận; quà luôn kích hoạt được.
       </p>
       {config.actions.map((a) => (
-        <ActionCard key={a.id} action={a} run={run} reloadConfig={reloadConfig} />
+        <ActionCard key={a.id} action={a} run={run} reloadConfig={reloadConfig} randomIn={randomUses(a.id, config)} />
       ))}
     </div>
   );
 }
 
-function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: Run; reloadConfig: () => Promise<void> }) {
+function ActionCard({
+  action,
+  run,
+  reloadConfig,
+  randomIn
+}: {
+  action: ActionConfig;
+  run: Run;
+  reloadConfig: () => Promise<void>;
+  /** Các chế độ miễn phí vẫn bốc cân ngẫu nhiên cho hành động này (cá to định kỳ / sự kiện tập thể). */
+  randomIn: string[];
+}) {
   const [form, setForm] = useState(() => toForm(action));
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
   const num = (k: 'durationMs' | 'cooldownMs' | 'userCooldownMs' | 'priority' | 'points' | 'kingCalm' | 'kingStamina', label: string) => (
@@ -87,7 +103,13 @@ function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: 
           {action.name} <code className="muted">{action.id}</code>
           {action.fish && (
             <div className="muted fish-sub">
-              {action.fish.name} · {action.fish.minKg}–{action.fish.maxKg} kg
+              {action.fish.name} · <span className="kg">Quà: cố định {fmtKgVi(giftKg(action.fish))} kg</span>
+              {randomIn.length > 0 && (
+                <>
+                  {' '}
+                  · {randomIn.join(' / ')}: ngẫu nhiên {fmtKgVi(action.fish.minKg)}–{fmtKgVi(action.fish.maxKg)} kg
+                </>
+              )}
             </div>
           )}
         </h2>
@@ -152,6 +174,16 @@ function ActionCard({ action, run, reloadConfig }: { action: ActionConfig; run: 
               Kg đến
               <input type="number" min={0} step={0.5} value={form.fishMaxKg} onChange={(e) => set('fishMaxKg', Number(e.target.value))} />
             </label>
+            <p className="muted span-all">
+              Khi có quà: <b className="kg">cố định {fmtKgVi(giftKg({ minKg: form.fishMinKg, maxKg: form.fishMaxKg }))} kg</b> (giữa khoảng,
+              không may rủi khi có quà — tuân thủ TikTok).
+              {randomIn.length > 0 && (
+                <>
+                  {' '}
+                  Khi chạy làm {randomIn.join(' / ')} (miễn phí): ngẫu nhiên {fmtKgVi(form.fishMinKg)}–{fmtKgVi(form.fishMaxKg)} kg.
+                </>
+              )}
+            </p>
           </div>
         ) : (
           <span className="muted">Hành động này không kéo cá (chỉ diễn hoạt ảnh).</span>

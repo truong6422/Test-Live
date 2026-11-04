@@ -75,7 +75,8 @@ export interface NormalizerOptions {
  */
 export class TikTokNormalizer {
   private streaks = new Map<string, Streak>();
-  private finalized = new Map<string, number>();
+  /** Streak đã tự chốt do timeout: mốc chốt + số lượng đã chốt (để nhận ra message muộn vs streak mới). */
+  private finalized = new Map<string, { at: number; count: number }>();
   private readonly streakTimeoutMs: number;
 
   constructor(opts: NormalizerOptions = {}) {
@@ -144,10 +145,15 @@ export class TikTokNormalizer {
     }
 
     const key = `${user.platformId}:${d.groupId && d.groupId !== '0' ? d.groupId : giftId}`;
-    if (this.finalized.has(key)) {
-      // streak đã được chốt (do timeout) — bỏ qua message tới muộn
-      if (ended) this.finalized.delete(key);
-      return null;
+    const fin = this.finalized.get(key);
+    if (fin) {
+      if (repeat >= fin.count) {
+        // message tới muộn của streak đã chốt (do timeout) — bỏ qua để không đếm hai lần
+        if (ended) this.finalized.delete(key);
+        return null;
+      }
+      // repeatCount thấp hơn số đã chốt → đây là streak MỚI cùng quà (không có groupId): không được nuốt mất quà.
+      this.finalized.delete(key);
     }
     const prev = this.streaks.get(key);
     const streak: Streak = prev ?? { key, user, giftId, name, diamonds, count: 0, lastAt: now, firstMsgId: msgId ?? key };
@@ -169,11 +175,11 @@ export class TikTokNormalizer {
     for (const [key, s] of this.streaks) {
       if (now - s.lastAt < this.streakTimeoutMs) continue;
       this.streaks.delete(key);
-      this.finalized.set(key, now);
+      this.finalized.set(key, { at: now, count: s.count });
       out.push(this.streakEvent(s, now, `streak:${key}:${s.firstMsgId}`));
     }
-    for (const [key, at] of this.finalized) {
-      if (now - at > 5 * 60_000) this.finalized.delete(key);
+    for (const [key, f] of this.finalized) {
+      if (now - f.at > 5 * 60_000) this.finalized.delete(key);
     }
     return out;
   }

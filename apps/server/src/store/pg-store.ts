@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
@@ -7,7 +7,7 @@ import type { CollectiveConfig, CollectiveState, EngineLimits, FishingConfig, Ga
 import { reconcileConfig } from '../config/defaults';
 import * as s from '../db/schema';
 import type { PlayerRecord, SessionStat } from '../players/players';
-import type { GameStore, HistoryQuery } from './store';
+import type { GameStore, HistoryQuery, RuntimeState } from './store';
 
 /** Docker (server đã bundle) đặt MIGRATIONS_DIR; dev dùng thư mục mã nguồn. */
 export const MIGRATIONS_DIR = process.env.MIGRATIONS_DIR ?? path.join(import.meta.dir, '..', 'db', 'migrations');
@@ -137,31 +137,62 @@ export class PgStore implements GameStore {
     batch: { player: PlayerRecord & { title: string }; session: SessionStat | undefined }[]
   ): Promise<void> {
     if (batch.length === 0) return;
+    // Ghi theo lô nhiều dòng (một INSERT … ON CONFLICT cho mỗi ~500 người) thay vì 2 câu lệnh / người mỗi 2 giây.
+    const playerRows = batch.map(({ player: p }) => ({
+      platformId: p.platformId,
+      username: p.username,
+      displayName: p.displayName,
+      avatarUrl: p.avatarUrl ?? null,
+      totalParticipations: p.totalParticipations,
+      totalPoints: p.totalPoints,
+      totalDiamonds: p.totalDiamonds ?? 0,
+      totalGrams: p.totalGrams ?? 0,
+      actionCounts: p.actionCounts,
+      grantedTitles: p.grantedTitles,
+      title: p.title,
+      updatedAt: new Date()
+    }));
+    const sessionRows = sessionId
+      ? batch.flatMap(({ player: p, session }) => (session ? [{ sessionId, playerId: p.platformId, ...session }] : []))
+      : [];
     await this.db.transaction(async (tx) => {
-      for (const { player: p, session } of batch) {
-        const row = {
-          platformId: p.platformId,
-          username: p.username,
-          displayName: p.displayName,
-          avatarUrl: p.avatarUrl ?? null,
-          totalParticipations: p.totalParticipations,
-          totalPoints: p.totalPoints,
-          totalDiamonds: p.totalDiamonds ?? 0,
-          totalGrams: p.totalGrams ?? 0,
-          actionCounts: p.actionCounts,
-          grantedTitles: p.grantedTitles,
-          title: p.title,
-          updatedAt: new Date()
-        };
-        await tx.insert(s.players).values(row).onConflictDoUpdate({ target: s.players.platformId, set: row });
-        if (sessionId && session) {
-          await tx
-            .insert(s.sessionPlayers)
-            .values({ sessionId, playerId: p.platformId, ...session })
-            .onConflictDoUpdate({ target: [s.sessionPlayers.sessionId, s.sessionPlayers.playerId], set: { ...session } });
-        }
+      for (let i = 0; i < playerRows.length; i += PLAYER_CHUNK) {
+        await tx
+          .insert(s.players)
+          .values(playerRows.slice(i, i + PLAYER_CHUNK))
+          .onConflictDoUpdate({ target: s.players.platformId, set: excludedSet(s.players, PLAYER_UPDATE_COLS) });
+      }
+      for (let i = 0; i < sessionRows.length; i += PLAYER_CHUNK) {
+        await tx
+          .insert(s.sessionPlayers)
+          .values(sessionRows.slice(i, i + PLAYER_CHUNK))
+          .onConflictDoUpdate({
+            target: [s.sessionPlayers.sessionId, s.sessionPlayers.playerId],
+            set: excludedSet(s.sessionPlayers, SESSION_UPDATE_COLS)
+          });
       }
     });
+  }
+
+  async loadSessionStats(sessionId: string): Promise<{ playerId: string; stat: SessionStat }[]> {
+    const rows = await this.db.select().from(s.sessionPlayers).where(eq(s.sessionPlayers.sessionId, sessionId));
+    return rows.map((r) => ({
+      playerId: r.playerId,
+      stat: { participations: r.participations, points: r.points, diamonds: r.diamonds, grams: r.grams }
+    }));
+  }
+
+  async loadRuntime(): Promise<RuntimeState | null> {
+    const [row] = await this.db.select().from(s.settings).where(eq(s.settings.key, RUNTIME_KEY));
+    const v = row?.value as Partial<RuntimeState> | undefined;
+    if (!v || typeof v !== 'object') return null;
+    return { running: v.running === true, sessionId: typeof v.sessionId === 'string' ? v.sessionId : null, lastActivityAt: Number(v.lastActivityAt) || 0 };
+  }
+
+  async saveRuntime(state: RuntimeState): Promise<void> {
+    // Chỉ là một khoá trong bảng settings (key/value jsonb) — không cần migration.
+    const value = { ...state };
+    await this.db.insert(s.settings).values({ key: RUNTIME_KEY, value }).onConflictDoUpdate({ target: s.settings.key, set: { value } });
   }
 
   async startSession(id: string, tiktokUsername: string | null): Promise<void> {
@@ -184,10 +215,13 @@ export class PgStore implements GameStore {
 
   async appendHistory(entries: HistoryEntry[]): Promise<void> {
     if (entries.length === 0) return;
-    await this.db
-      .insert(s.eventHistory)
-      .values(entries.map((e) => ({ ...e, createdAt: new Date(e.createdAt) })))
-      .onConflictDoNothing();
+    // Chia lô: Postgres giới hạn 65 535 tham số mỗi câu lệnh (11 cột × 5000+ bản ghi tồn khi DB vừa sống lại sẽ vượt).
+    for (let i = 0; i < entries.length; i += HISTORY_CHUNK) {
+      await this.db
+        .insert(s.eventHistory)
+        .values(entries.slice(i, i + HISTORY_CHUNK).map((e) => ({ ...e, createdAt: new Date(e.createdAt) })))
+        .onConflictDoNothing();
+    }
   }
 
   async listHistory(q: HistoryQuery): Promise<HistoryEntry[]> {
@@ -205,8 +239,9 @@ export class PgStore implements GameStore {
   }
 
   async pruneHistory(olderThan: Date): Promise<number> {
-    const res = await this.db.delete(s.eventHistory).where(lt(s.eventHistory.createdAt, olderThan)).returning({ id: s.eventHistory.id });
-    return res.length;
+    // Không dùng RETURNING: lần dọn đầu tiên có thể xoá hàng triệu dòng — chỉ cần số lượng.
+    const res = await this.db.delete(s.eventHistory).where(lt(s.eventHistory.createdAt, olderThan));
+    return Number((res as unknown as { count?: number }).count ?? 0);
   }
 
   async saveCollective(sessionId: string | null, st: CollectiveState, rewardTitle: string): Promise<void> {
@@ -238,6 +273,39 @@ export class PgStore implements GameStore {
   async close(): Promise<void> {
     await this.client.end({ timeout: 5 });
   }
+}
+
+/** Khoá settings lưu trạng thái chạy (loadConfig chỉ đọc các khoá cấu hình cụ thể nên không đụng khoá này). */
+const RUNTIME_KEY = 'runtime';
+
+/** Số bản ghi lịch sử mỗi INSERT (11 cột → ~11k tham số, dưới giới hạn 65 535 của Postgres). */
+const HISTORY_CHUNK = 1000;
+/** Số người mỗi INSERT cần thủ (13 cột). */
+const PLAYER_CHUNK = 500;
+
+const PLAYER_UPDATE_COLS = [
+  'username',
+  'displayName',
+  'avatarUrl',
+  'totalParticipations',
+  'totalPoints',
+  'totalDiamonds',
+  'totalGrams',
+  'actionCounts',
+  'grantedTitles',
+  'title',
+  'updatedAt'
+] as const satisfies readonly (keyof typeof s.players.$inferInsert)[];
+const SESSION_UPDATE_COLS = ['participations', 'points', 'diamonds', 'grams'] as const satisfies readonly (keyof typeof s.sessionPlayers.$inferInsert)[];
+
+/** `SET col = excluded.col` cho upsert nhiều dòng (giá trị của chính dòng đang chèn). */
+function excludedSet(table: object, cols: readonly string[]): Record<string, SQL> {
+  const out: Record<string, SQL> = {};
+  for (const key of cols) {
+    const col = (table as unknown as Record<string, { name: string }>)[key]!;
+    out[key] = sql.raw(`excluded."${col.name}"`);
+  }
+  return out;
 }
 
 function actionRow(a: GameConfig['actions'][number], sortOrder: number) {

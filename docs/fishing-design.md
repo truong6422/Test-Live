@@ -4,20 +4,24 @@ Thay hoàn toàn chủ đề văn phòng "Sếp ơi em xin nghỉ!". Kiến trú
 
 ## ⚠️ LUẬT CHƠI CHÍNH (bản sửa theo yêu cầu chủ phòng — ưu tiên hơn mọi mục bên dưới nếu mâu thuẫn)
 
-1. **Bố cục**: hồ câu ở giữa màn hình. Người xem ngồi câu ở **hai bên bờ** (bờ trái, bờ phải, xếp dọc theo mép hồ) và **chiếu giữa trước mặt hồ** (bờ gần, phía dưới, giữa màn hình — `fishing.frontSeats` ghế, mặc định 5, to và nổi bật hơn).
-2. **Ai ngồi chiếu giữa**: người **tặng quà nhiều nhất trong phiên**, hoà thì người **câu lâu nhất** (`fishingMs`). Server tính lại mỗi chu kỳ và gán `RosterMember.seat = 'front' | 'left' | 'right'` (người còn lại chia đều hai bên, ổn định theo hash ID để không nhảy chỗ). Overlay chỉ hiển thị theo `seat`. Bỏ khái niệm "4 bến".
-3. **Vào câu bằng bình luận**: BẤT KỲ bình luận nào cũng đưa người xem vào hồ (vào roster, tối đa 100). Tặng quà cũng vào. Không tương tác quá `fishing.idleKickMs` (mặc định 10 phút) thì rời hồ.
-4. **Câu tự động mỗi 5 giây** (`fishing.tickMs = 5000`): mỗi người đang ngồi lên **1 con cá** bốc từ `fishing.loot` (bảng loot ở mục "Việc câu"). Server gửi gộp **một** tin `{ type: 'catches', data: CatchEvent[] }` mỗi chu kỳ; overlay cho từng cần thủ giật cần, cá nhỏ bay lên kèm số kg (lệch pha ngẫu nhiên trong 5s cho đỡ đồng loạt). Mỗi con cộng kg + điểm (`fishingMs` cộng dồn).
+1. **Bố cục**: hồ câu ở giữa màn hình. Người xem ngồi câu ở **hai bên bờ** (bờ trái, bờ phải, xếp dọc theo mép hồ) và **Bến Vàng trước mặt hồ** (bờ gần, phía dưới, giữa màn hình — `fishing.frontSeats` ghế, mặc định 5, to và nổi bật hơn).
+2. **Ai ngồi Bến Vàng**: người **tặng quà nhiều nhất trong phiên**, hoà thì người **câu lâu nhất** (`fishingMs`). Server tính lại mỗi chu kỳ và gán `RosterMember.seat = 'front' | 'left' | 'right'` (người còn lại chia đều hai bên, ổn định theo hash ID để không nhảy chỗ). Overlay chỉ hiển thị theo `seat`. Bỏ khái niệm "4 bến".
+3. **Vào câu bằng bình luận**: BẤT KỲ bình luận nào cũng đưa người xem vào hồ (roster, tối đa `ROSTER_MAX = 50`). Tặng quà cũng vào (một món quà = **một** lượt hoạt động như một bình luận, không giữ chỗ lâu hơn). Thả tim / share / follow của người **đang ngồi** làm mới thời gian hoạt động, nhưng không đưa người mới vào hồ. Không tương tác quá `fishing.idleKickMs` (mặc định 10 phút) thì rời hồ. Hồ đầy: người lâu không hoạt động nhất **đã có ít nhất một con cá** nhường chỗ (người mới chưa câu được không bị đẩy ra; không ai có cá thì người lâu không hoạt động nhất).
+4. **Câu tự động** (`fishing.tickMs = 5000`): mỗi chu kỳ có `n` con cá thường (bốc từ `fishing.loot`) chia **lần lượt** theo thứ tự vào hồ (xoay vòng — hết người cuối quay lại người đầu; không ai được 2 con trong một chu kỳ). `n = clamp(ceil(N × tickMs / targetCatchMs), catchesPerTick, maxCatchesPerTick)`, không quá N (N = số người đang ngồi; mặc định `targetCatchMs = 30000`, `maxCatchesPerTick = 8`, `catchesPerTick = 1` là mức tối thiểu) → mỗi người được cá khoảng mỗi 30 giây dù hồ đông. **Người mới vào chưa có con nào được con đầu tiên ở chu kỳ kế** (tính trong ngân sách `n`). Server gửi gộp **một** tin `{ type: 'catches', data: CatchEvent[] }` mỗi chu kỳ; mỗi con cộng kg + điểm; mọi người ngồi được cộng `fishingMs`.
 5. **Cá to**:
-   - **Định kỳ**: cứ `fishing.bigFishEveryMs` (mặc định 180000 = 3 phút) có "CÁ TO XUẤT HIỆN!" — server chọn ngẫu nhiên một người đang ngồi (ưu tiên x2 cho chiếu giữa) và chạy hành động `fishing.bigFishActionId` (mặc định `big_fish_event`). `snapshot.nextBigFishAt` + tin `bigfish.next` để HUD đếm ngược.
-   - **Tặng quà**: người tặng được **kéo cá to** ngay, loài cá to theo giá trị kim cương (bảng dưới). Server bốc cân trong `ActionConfig.fish` và gửi `RunningAction.fish = { emoji, name, kg }`; kg cộng vào người đó.
+   - **Định kỳ**: cứ `fishing.bigFishEveryMs` (mặc định 180000 = 3 phút) có "CÁ TO XUẤT HIỆN!" — server chọn ngẫu nhiên **đều** một người đang ngồi (không ưu tiên ai; từ 2 người trở lên thì không trúng hai lần liền) và chạy hành động `fishing.bigFishActionId` (mặc định `big_fish_event`). Đang kéo cá quà thì hoãn tới khi hàng đợi trống, nhưng **không quá 60 giây** — quá hạn thì chạy ngay sau hoạt ảnh đang chạy (quà dồn không bỏ đói sự kiện miễn phí). `snapshot.nextBigFishAt` + tin `bigfish.next` để HUD đếm ngược.
+   - **Tặng quà**: người tặng được **kéo cá to** ngay, loài cá to theo giá trị kim cương (bảng dưới). Cân **cố định** = giữa khoảng `ActionConfig.fish` (`fixedBigFish`, không ngẫu nhiên khi có quà) và gửi `RunningAction.fish = { emoji, name, kg }`; kg cộng vào người đó.
    - **Hiệu ứng hoành tráng**: cần cong vút, dây căng rung, nước xoáy, bọt tung, rung màn hình, cá nhảy khỏi mặt nước xoay vòng, băng rôn tên + cân nặng to giữa màn hình, pháo hoa / tia sáng, cả hồ cổ vũ. Cá càng to (bậc càng cao) hiệu ứng càng dài và lớn.
 6. **Hai bảng**: **BẢNG CÂN CÁ** (`kgBoard`, xếp theo tổng kg trong phiên) và **TOP QUÀ TẶNG** (`leaderboard`, theo kim cương). Tin `leaderboard` mang cả hai.
 7. Cá Thần không còn là boss có thanh máu trên HUD: `KingState`/`kingEffect` vẫn còn trong kiểu dữ liệu (giữ nguyên, server vẫn tính) nhưng **HUD không hiển thị thanh Cá Thần**. "Cá Thần huyền thoại" là loài cá to bậc cao nhất.
+8. **Game dừng / LIVE kết thúc**: bấm "Dừng game" chỉ dừng **câu tự động, cá to định kỳ và sự kiện tập thể**. Quà **không bao giờ bị bỏ**: vẫn cộng cá cố định + kim cương + điểm và chạy hoạt ảnh / feed. Bình luận vẫn đưa người vào hồ (không kích hoạt việc vui / hành động, lịch sử ghi `game_stopped`). Khi TikTok báo kênh **offline / LIVE kết thúc**, server cũng tạm dừng câu tự động + cá to + tập thể + mời rời hồ (`snapshot.streamOffline = true`, đồng hồ cá to đóng băng) và chạy tiếp khi kết nối lại.
+9. **Khởi động lại server**: phiên LIVE còn mở được gắn lại và bộ đếm phiên (`session_players`) nạp lại từ DB (không ghi đè bằng số 0). Nếu trước khi tắt game đang chạy và hoạt động gần nhất chưa quá 2 giờ thì game **tự chạy lại**; ngược lại để dừng chờ chủ phòng. Trạng thái lưu ở khoá `runtime` trong bảng `settings` (không cần migration). Người ngồi trong hồ không khôi phục (chỉ trong bộ nhớ).
+10. **Mời rời hồ (admin)**: trong 10 phút người đó không vào lại hồ — **kể cả bằng quà** (quà không mua được việc bỏ qua kiểm duyệt). Quà của họ vẫn được ghi nhận (kim cương, điểm, cân cố định) nhưng tên **không hiện** trên overlay (không chat, việc vui, hoạt ảnh, feed; ẩn khỏi bảng phiên). Họ cũng không góp sức / không nhận phần chia sự kiện tập thể.
 
 ### Tuân thủ chính sách TikTok LIVE (từ báo cáo nghiên cứu 03/11/2026)
 
-- Quà → loài cá **cố định theo bậc** (không có "cơ hội/tỉ lệ trúng"). Cá to định kỳ chọn **đều** trong số người đang ngồi, KHÔNG ưu tiên người tặng quà.
+- Quà → loài cá **cố định theo bậc** và **cân cố định** (giữa khoảng) — không có "cơ hội/tỉ lệ trúng" khi người xem bỏ tiền. Cá to định kỳ chọn **đều** trong số người đang ngồi, KHÔNG ưu tiên người tặng quà.
+- Quà **không góp** vào sự kiện tập thể (phần thưởng có cân ngẫu nhiên), không mở khoá danh hiệu, không giữ chỗ trong hồ lâu hơn bình luận, không bỏ qua lệnh mời rời hồ của admin. Quà không bao giờ bị bỏ (kể cả khi game dừng, hàng đợi đầy hay vượt giới hạn tần suất).
 - Không giải thưởng giá trị thật; overlay luôn ghi "Điểm chỉ để vui, không quy đổi".
 - Câu chữ trung tính, không xin quà lặp lại / nhấp nháy / thúc giục.
 - Demo bị khoá khi đang kết nối TikTok thật; demo luôn có nhãn DEMO to.
@@ -92,7 +96,7 @@ Mapping quà mặc định: `7934 Heart Me → feed_king`, các bậc giftId 0: 
 
 ## Sự kiện tập thể
 
-`Cả hồ kéo Cá Thần` — mỗi bình luận / hành động góp 1 phần, mục tiêu 100, chạy `grand_haul`. Danh hiệu thưởng: `Kẻ săn Cá Thần`.
+`Cả hồ kéo Cá Thần` — mỗi bình luận / share / follow góp 1 phần (**tối đa 3 lượt mỗi người mỗi vòng**), mục tiêu 100, chạy `grand_haul`. **Quà và thả tim không góp** (phần thưởng Cá Thần có cân ngẫu nhiên nên không được gắn với quà). Người đang bị mời rời hồ không góp và không nhận phần. Cân Cá Thần chia đều cho người góp sức. Game dừng / LIVE kết thúc thì sự kiện tập thể tạm dừng. Danh hiệu thưởng: `Kẻ săn Cá Thần`.
 
 ## Việc câu miễn phí (bình luận) — `WorkTask`
 
@@ -112,7 +116,7 @@ Server bốc ngẫu nhiên theo trọng số (cân làm tròn 1 chữ số thậ
 
 ## Danh hiệu cần thủ (`PlayerTitle.id`)
 
-`rookie` Cần thủ tập sự (mặc định) · `angler` Cần thủ chăm chỉ (≥ 20 lần câu) · `big_catch` Sát thủ cá to (từng câu ≥ 10 kg — đếm lượt loot ≥ 10kg trong `actionCounts['big_catch']`) · `troll` Kẻ phá hồ (≥ 10 lượt hành động quà) · `king_hunter` Kẻ săn Cá Thần (nhận từ sự kiện tập thể).
+`rookie` Cần thủ tập sự (mặc định) · `angler` Cần thủ chăm chỉ (≥ 20 lần câu) · `big_catch` Sát thủ cá to (từng câu ≥ 10 kg — đếm lượt loot ≥ 10kg trong `actionCounts['big_catch']`) · `troll` Kẻ phá hồ (≥ 30 lượt việc vui bằng bình luận — không tính quà; cá từ quà cũng không tính vào `big_catch`) · `king_hunter` Kẻ săn Cá Thần (nhận từ sự kiện tập thể).
 
 ## Bảng xếp hạng
 

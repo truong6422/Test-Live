@@ -277,6 +277,15 @@ describe('GameEngine — quà → kéo cá to, xếp hạng theo kim cương và
     expect(of('action.started')).toHaveLength(0);
   });
 
+  test('quà → cân CỐ ĐỊNH giữa khoảng, không phụ thuộc số ngẫu nhiên (không may rủi khi có tiền)', () => {
+    for (const r of [0, 0.99]) {
+      const { engine, of } = makeEngine(undefined, () => r);
+      expect(engine.ingest(giftEv('a', 1))).toBe('accepted'); // Rose → pull_carp 3–6 kg
+      expect(of('action.started')[0]!.fish).toEqual({ emoji: '🐟', name: 'Cá chép to', kg: 4.5 });
+      expect(engine.snapshot().kgBoard.find((e) => e.platformId === 'a')?.kg).toBe(4.5);
+    }
+  });
+
   test('quà kéo cá to theo bậc giá trị; cân cộng cho người tặng (kể cả tập sự)', () => {
     const { engine, clock, of } = makeEngine();
     expect(engine.ingest(giftEv('a', 500))).toBe('accepted'); // Money Gun → pull_legend
@@ -293,7 +302,8 @@ describe('GameEngine — quà → kéo cá to, xếp hạng theo kim cương và
     );
     const a = engine.snapshot().kgBoard.find((e) => e.platformId === 'a')!;
     expect(a.kg).toBeGreaterThanOrEqual(225); // + cá câu tự động trong 30 giây
-    expect(engine.players.get('a')?.actionCounts.big_catch).toBeGreaterThanOrEqual(1);
+    // Cá từ quà không tính vào danh hiệu "Sát thủ cá to" (không có mốc danh hiệu cho việc tặng quà).
+    expect(engine.players.get('a')?.actionCounts.big_catch ?? 0).toBe(0);
   });
 
   test('leaderboard (WS + snapshot) mang diamonds + kgBoard, xếp theo kim cương', () => {

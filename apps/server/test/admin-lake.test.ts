@@ -135,7 +135,7 @@ describe('API quản trị hồ câu / overlay / thống kê / bộ lọc từ',
     expect(lake.nextTurnId).toBe('b');
   });
 
-  test('POST /api/lake/kick: mời rời hồ, không tự vào lại bằng bình luận (quà vẫn vào)', async () => {
+  test('POST /api/lake/kick: mời rời hồ, không vào lại bằng bình luận lẫn quà (quà vẫn được ghi nhận, không hiện tên)', async () => {
     await login();
     await service.startGame();
     for (const id of ['a', 'b']) service.engine.ingest(comment(id));
@@ -155,8 +155,25 @@ describe('API quản trị hồ câu / overlay / thống kê / bộ lọc từ',
     service.engine.ingest(comment('b'));
     expect(service.engine.lakeState().roster.some((m) => m.platformId === 'b')).toBe(true);
 
-    // Bị mời ra rồi tặng quà → vào lại ngay.
+    // Bị mời ra rồi tặng quà → KHÔNG vào lại (quà không mua được việc bỏ qua kiểm duyệt), tên không lên overlay,
+    // nhưng quà vẫn được ghi nhận (kim cương / cân cá).
     await post('/api/lake/kick', { platformId: 'b' });
+    const msgs: { type: string; data: unknown }[] = [];
+    const off = service.subscribe((m) => msgs.push(m));
+    const diamondsBefore = service.engine.players.get('b')!.totalDiamonds ?? 0;
+    expect(service.engine.ingest(gift('b', 500))).toBe('accepted');
+    off();
+    expect(service.engine.lakeState().roster.some((m) => m.platformId === 'b')).toBe(false);
+    expect(service.engine.players.get('b')!.totalDiamonds).toBe(diamondsBefore + 500);
+    expect(service.engine.players.get('b')!.totalGrams).toBeGreaterThan(0);
+    expect(msgs.some((m) => m.type === 'action.started' || m.type === 'chat' || m.type === 'work')).toBe(false);
+    expect(JSON.stringify(msgs.filter((m) => m.type !== 'history'))).not.toContain('"b"');
+    expect(service.engine.snapshot().leaderboard.some((e) => e.platformId === 'b')).toBe(false);
+    // Bình luận / việc vui của người đang bị mời ra cũng không hiện.
+    expect(service.engine.ingest(comment('b'))).toBe('filtered');
+    // Hết hạn chặn → quà / bình luận lại vào hồ bình thường.
+    clock.advance(KICK_REJOIN_BLOCK_MS + 1);
+    service.engine.tick();
     service.engine.ingest(gift('b', 1));
     expect(service.engine.lakeState().roster.some((m) => m.platformId === 'b')).toBe(true);
 

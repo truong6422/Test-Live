@@ -82,5 +82,9 @@ const shutdown = async (signal: string) => {
   await service.shutdown().catch((err) => log.error('Lỗi khi tắt', { err }));
   process.exit(0);
 };
+// Chạy 24/7: một promise bị từ chối / lỗi lạc trong callback thư viện (TikTok, DB) không được làm sập server
+// (mất người đang ngồi trong hồ, hàng đợi, thống kê phiên chỉ có trong bộ nhớ). Ghi log rồi chạy tiếp.
+process.on('unhandledRejection', (reason) => log.error('Promise bị từ chối không được xử lý', { err: reason }));
+process.on('uncaughtException', (err) => log.error('Lỗi không được bắt', { err }));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));

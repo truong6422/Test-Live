@@ -109,9 +109,16 @@ export const DEFAULT_LOOT: LootItem[] = [
   { emoji: '👑', name: 'Cá Koi vàng', weight: 1, minKg: 3, maxKg: 6, points: 25 }
 ];
 
+/** Mỗi người ngồi được một con cá thường sau khoảng này (số cá mỗi chu kỳ tự tăng theo số người). */
+export const DEFAULT_TARGET_CATCH_MS = 30_000;
+/** Trần số cá thường mỗi chu kỳ. */
+export const DEFAULT_MAX_CATCHES_PER_TICK = 8;
+
 export const DEFAULT_FISHING: FishingConfig = {
   tickMs: 5000,
   catchesPerTick: 1,
+  targetCatchMs: DEFAULT_TARGET_CATCH_MS,
+  maxCatchesPerTick: DEFAULT_MAX_CATCHES_PER_TICK,
   loot: DEFAULT_LOOT,
   bigFishEveryMs: 180_000,
   bigFishShadowMs: 15_000,
@@ -123,7 +130,7 @@ export const DEFAULT_FISHING: FishingConfig = {
 export const DEFAULT_COLLECTIVE: CollectiveConfig = {
   enabled: true,
   name: 'Cả hồ kéo Cá Thần',
-  description: 'Bình luận hoặc tặng quà để góp sức. Đủ mục tiêu, mọi cần thủ cùng kéo Cá Thần lên bờ và chia nhau cân cá!',
+  description: 'Mỗi bình luận góp một tay. Đủ mục tiêu, cả hồ cùng kéo Cá Thần lên bờ và chia nhau cân cá!',
   goal: 100,
   durationMs: 0,
   restartDelayMs: 15000,

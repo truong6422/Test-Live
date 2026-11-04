@@ -7,7 +7,7 @@ import { Texture } from 'pixi.js';
  *   public/sprites/small-fish.png lưới 3×3 trên nền magenta, KHÔNG có vạch kẻ ô, mọi món quay đầu sang TRÁI
  *                                 (thứ tự = fishing.loot mặc định: rô, chép, trắm / tôm, rùa, ủng / tất, lăng, koi vàng)
  *   public/sprites/anglers.png    lưới 3×3 trên nền magenta, không vạch kẻ ô: hàng 1–2 = 6 người ngồi ghế nhìn sang PHẢI,
- *                                 hàng 3 = 3 người ngồi nhìn thẳng (chiếu VIP). Cần câu do code vẽ.
+ *                                 hàng 3 = 3 người ngồi nhìn thẳng (Bến Vàng). Cần câu do code vẽ.
  * Gọi loadAssets() một lần trước buildLake().
  */
 
@@ -67,7 +67,7 @@ export function smallFishTexture(name: string, emoji?: string): Texture | null {
 
 let lakeBg: Texture | null = null;
 let anglerSheet: Texture | null = null;
-/** Ô 0–5: ngồi nghiêng nhìn sang PHẢI; ô 6–8: ngồi nhìn thẳng (chiếu VIP). */
+/** Ô 0–5: ngồi nghiêng nhìn sang PHẢI; ô 6–8: ngồi nhìn thẳng (Bến Vàng). */
 const ANGLER_IDS = ['s0', 's1', 's2', 's3', 's4', 's5', 'f0', 'f1', 'f2'] as const;
 const anglerTex = new Map<string, Texture>();
 

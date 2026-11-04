@@ -9,14 +9,15 @@ import type {
   ServerMessage,
   WorkTask
 } from '@cau/shared';
-import { DemoConnector } from './connectors/demo/demo-connector';
+import { DemoConnector, type DemoProfile } from './connectors/demo/demo-connector';
 import type { ConnectorState, LiveConnector } from './connectors/types';
 import type { Clock } from './engine/clock';
 import { GameEngine } from './engine/engine';
 import type { Logger } from './logger';
 import { cleanComment, cleanDisplayName, normalizeBlocklist, setBlocklist, toBlockSet } from './normalizer/sanitize';
+import { parseTikTokUsername } from './normalizer/tiktok-normalizer';
 import { computeTitle } from './players/players';
-import type { GameStore, HistoryQuery } from './store/store';
+import type { GameStore, HistoryQuery, RuntimeState } from './store/store';
 
 /** Phần điều khiển TikTok mà service cần (cài đặt thật ở connectors/tiktok). */
 export interface TikTokControl extends LiveConnector {
@@ -36,8 +37,12 @@ export interface ServiceDeps {
 }
 
 const HISTORY_BUFFER_MAX = 5000;
+/** Khởi động lại mà phiên đã im quá lâu (> 2 giờ) thì không tự chạy game lại. */
+export const AUTO_RESUME_MAX_IDLE_MS = 2 * 3600_000;
 /** Trạng thái TikTok coi như đang LIVE thật — không được bật demo. */
-const LIVE_STATUSES: ReadonlySet<ConnectorState['status']> = new Set(['connected', 'connecting', 'reconnecting']);
+// 'offline' / 'error' cũng tính: connector vẫn đang tự thử lại và sẽ nhận sự kiện thật ngay khi kênh lên LIVE.
+// Chỉ 'disconnected' (admin đã ngắt) mới cho bật demo.
+const LIVE_STATUSES: ReadonlySet<ConnectorState['status']> = new Set(['connected', 'connecting', 'reconnecting', 'offline', 'error']);
 
 /**
  * Nối Game Engine với lưu trữ, connector và client. Mọi thao tác admin đi qua đây.
@@ -54,7 +59,15 @@ export class GameService {
   private collectiveDirty = false;
   private timers: ReturnType<typeof setInterval>[] = [];
   private listeners = new Set<(m: ServerMessage) => void>();
-  private flushing = false;
+  /** Lượt ghi DB đang chạy (null = rảnh). */
+  private flushing: Promise<void> | null = null;
+  private dbFailures = 0;
+  /** Trạng thái chạy đã ghi gần nhất (để chỉ ghi khi đổi). */
+  private savedRuntime: RuntimeState | null = null;
+  /** Lần bấm chạy gần nhất (tính như một lần hoạt động). */
+  private runtimeStartedAt = 0;
+  private historyDropped = 0;
+  private tickErrors = 0;
 
   private constructor(private deps: ServiceDeps, config: GameConfig) {
     this.store = deps.store;
@@ -71,7 +84,10 @@ export class GameService {
         this.historyBuffer.push(msg.data);
         if (this.historyBuffer.length > HISTORY_BUFFER_MAX) {
           this.historyBuffer.splice(0, this.historyBuffer.length - HISTORY_BUFFER_MAX);
-          this.log.warn('Bộ đệm lịch sử đầy, bỏ bớt bản ghi cũ (DB chậm hoặc mất kết nối?)');
+          // Mỗi tin lịch sử mới đều tràn khi DB sập → log thưa (lần đầu rồi mỗi 1000 bản ghi bị bỏ).
+          if (this.historyDropped++ % 1000 === 0) {
+            this.log.warn('Bộ đệm lịch sử đầy, bỏ bớt bản ghi cũ (DB chậm hoặc mất kết nối?)', { dropped: this.historyDropped });
+          }
         }
       }
       if (msg.type === 'collective') this.collectiveDirty = true;
@@ -79,12 +95,44 @@ export class GameService {
     });
 
     const ingest = (source: string) => (e: Parameters<GameEngine['ingest']>[0]) => {
-      const outcome = this.engine.ingest(e);
-      this.log.debug('event', { source, kind: e.kind, id: e.id, outcome });
+      try {
+        const outcome = this.engine.ingest(e);
+        this.log.debug('event', { source, kind: e.kind, id: e.id, outcome });
+      } catch (err) {
+        this.log.error('Lỗi xử lý sự kiện', { source, kind: e.kind, id: e.id, err });
+      }
     };
     this.tiktok.onEvent(ingest('tiktok'));
-    this.demo.onEvent(ingest('demo'));
-    this.tiktok.onState(() => this.pushConnectors());
+    this.demo.onEvent((e) => {
+      // Chốt chặn thứ hai: TikTok thật đang được yêu cầu kết nối thì sự kiện demo không bao giờ vào engine.
+      if (this.tiktok.state().status !== 'disconnected') {
+        this.demo.stop();
+        this.pushConnectors();
+        return;
+      }
+      ingest('demo')(e);
+    });
+    let prevStatus = this.tiktok.state().status;
+    this.tiktok.onState((st) => {
+      // TikTok vừa kết nối (kể cả tự kết nối lại sau khi kênh lên LIVE) → tắt demo và xoá dấu vết demo khỏi phiên.
+      if (st.status === 'connected' && prevStatus !== 'connected') this.leaveDemo();
+      // LIVE kết thúc / kênh chưa phát → tạm dừng câu tự động + cá to + tập thể; kết nối lại (hoặc admin ngắt
+      // TikTok để chạy demo / thử) thì chạy tiếp. Mất mạng tạm thời (reconnecting / error) không tính.
+      if (st.status === 'offline') this.engine.setStreamOnline(false);
+      else if (st.status === 'connected' || st.status === 'disconnected') this.engine.setStreamOnline(true);
+      prevStatus = st.status;
+      this.pushConnectors();
+    });
+  }
+
+  /** Tắt demo và gỡ người chơi demo khỏi hồ / bảng phiên / hàng đợi — không để demo trộn với LIVE thật. */
+  private leaveDemo(): void {
+    if (this.demo.running) {
+      this.demo.stop();
+      this.log.info('Tắt demo vì TikTok LIVE thật đã kết nối');
+    }
+    const n = this.engine.purgeDemo();
+    if (n > 0) this.log.info('Đã gỡ người chơi demo khỏi phiên', { removed: n });
   }
 
   static async create(deps: ServiceDeps): Promise<GameService> {
@@ -92,7 +140,49 @@ export class GameService {
     const config = await deps.store.loadConfig();
     const svc = new GameService(deps, config);
     svc.engine.loadPlayers(await deps.store.loadPlayers());
+    // Phiên LIVE còn mở (server khởi động lại giữa phiên): nạp lại bộ đếm phiên đã lưu để lần lưu kế tiếp
+    // không ghi đè số liệu phiên trong DB bằng bộ đếm bắt đầu lại từ 0.
+    const open = await deps.store.openSession();
+    if (open) svc.engine.restoreSession(open, await deps.store.loadSessionStats(open));
+    await svc.maybeResume(open);
     return svc;
+  }
+
+  /**
+   * Tự chạy lại game nếu trước khi tắt nó đang chạy, cùng phiên còn mở và hoạt động gần nhất chưa quá
+   * AUTO_RESUME_MAX_IDLE_MS; ngược lại để game dừng chờ chủ phòng bấm chạy.
+   */
+  private async maybeResume(openSession: string | null): Promise<void> {
+    const rt = await this.store.loadRuntime().catch(() => null);
+    if (!rt || !rt.running || !openSession || rt.sessionId !== openSession) return;
+    const idle = this.deps.clock.now() - rt.lastActivityAt;
+    if (idle < 0 || idle > AUTO_RESUME_MAX_IDLE_MS) {
+      this.log.info('Không tự chạy lại game: phiên đã lâu không hoạt động', { idleMs: idle });
+      return;
+    }
+    await this.startGame();
+    this.log.info('Tự chạy lại game sau khi khởi động lại', { sessionId: openSession, idleMs: idle });
+  }
+
+  /** Ghi trạng thái chạy khi đổi (bấm chạy/dừng) hoặc hoạt động gần nhất tiến thêm ≥ 1 phút (ít ghi DB). */
+  private async saveRuntime(force = false): Promise<void> {
+    const state: RuntimeState = {
+      running: this.engine.isRunning,
+      sessionId: this.engine.currentSessionId,
+      lastActivityAt: Math.max(this.engine.lastActivityAt, this.runtimeStartedAt)
+    };
+    const prev = this.savedRuntime;
+    if (
+      !force &&
+      prev &&
+      prev.running === state.running &&
+      prev.sessionId === state.sessionId &&
+      state.lastActivityAt - prev.lastActivityAt < 60_000
+    ) {
+      return;
+    }
+    await this.store.saveRuntime(state);
+    this.savedRuntime = state;
   }
 
   subscribe(fn: (m: ServerMessage) => void): () => void {
@@ -102,7 +192,16 @@ export class GameService {
 
   /** Bắt đầu vòng tick và lưu dữ liệu định kỳ. */
   startLoops(): void {
-    this.timers.push(setInterval(() => this.engine.tick(), 100));
+    this.timers.push(
+      setInterval(() => {
+        try {
+          this.engine.tick();
+        } catch (err) {
+          // Một tick lỗi không được làm sập server 24/7; ghi log thưa để không ngập log nếu lỗi lặp lại mỗi 100ms.
+          if (this.tickErrors++ % 600 === 0) this.log.error('Lỗi trong tick engine', { err, count: this.tickErrors });
+        }
+      }, 100)
+    );
     this.timers.push(setInterval(() => void this.flush(), 2000));
     this.timers.push(
       setInterval(() => {
@@ -123,31 +222,53 @@ export class GameService {
     await this.store.close();
   }
 
-  /** Ghi lịch sử, cần thủ và sự kiện tập thể xuống DB theo lô. */
+  /**
+   * Ghi lịch sử, cần thủ và sự kiện tập thể xuống DB theo lô.
+   * Gọi khi lần ghi trước còn chạy → chờ lần đó xong rồi ghi thêm một lượt (resetSession / shutdown không bỏ sót dữ liệu).
+   */
   async flush(): Promise<void> {
-    if (this.flushing) return;
-    this.flushing = true;
+    if (this.flushing) {
+      const inFlight = this.flushing;
+      await inFlight.catch(() => {});
+      // Nhiều lời gọi cùng chờ: chỉ một lời gọi chạy lượt tiếp, các lời gọi khác chờ chính lượt đó.
+      if (this.flushing && this.flushing !== inFlight) return this.flushing;
+    }
+    const run = this.flushOnce();
+    this.flushing = run;
+    try {
+      await run;
+    } finally {
+      if (this.flushing === run) this.flushing = null;
+    }
+  }
+
+  private async flushOnce(): Promise<void> {
     const sessionId = this.engine.currentSessionId;
     const history = this.historyBuffer.splice(0);
     const players = this.engine.players.takeDirty().map(({ player, session }) => ({
       player: { ...player, title: computeTitle(player) },
       session
     }));
+    const collectiveDirty = this.collectiveDirty;
+    this.collectiveDirty = false;
+    let historySaved = false;
     try {
       await this.store.appendHistory(history);
+      historySaved = true;
       await this.store.savePlayers(sessionId, players);
       const c = this.engine.snapshot().collective;
-      if (this.collectiveDirty && c) {
-        this.collectiveDirty = false;
-        await this.store.saveCollective(sessionId, c, this.config.collective.rewardTitle);
-      }
+      if (collectiveDirty && c) await this.store.saveCollective(sessionId, c, this.config.collective.rewardTitle);
+      await this.saveRuntime();
+      if (this.dbFailures > 0) this.log.info('Đã ghi lại được DB', { failedAttempts: this.dbFailures });
+      this.dbFailures = 0;
     } catch (err) {
       // Trả lại bộ đệm để lần sau ghi lại; game vẫn chạy bình thường.
-      this.historyBuffer.unshift(...history);
+      if (!historySaved) this.historyBuffer.unshift(...history);
       this.engine.players.markDirty(players.map((p) => p.player.platformId));
-      this.log.error('Lưu DB lỗi, sẽ thử lại', { err });
-    } finally {
-      this.flushing = false;
+      if (collectiveDirty) this.collectiveDirty = true;
+      // DB sập: flush chạy mỗi 2s → chỉ log lần đầu và mỗi ~1 phút.
+      if (this.dbFailures++ % 30 === 0) this.log.error('Lưu DB lỗi, sẽ thử lại', { err, failedAttempts: this.dbFailures });
+      if (this.historyBuffer.length > HISTORY_BUFFER_MAX) this.historyBuffer.splice(0, this.historyBuffer.length - HISTORY_BUFFER_MAX);
     }
   }
 
@@ -161,12 +282,15 @@ export class GameService {
       await this.store.startSession(sessionId, this.tiktok.state().username);
     }
     this.engine.start(sessionId);
+    this.runtimeStartedAt = this.deps.clock.now();
     this.log.info('Game bắt đầu', { sessionId });
+    await this.saveRuntime(true).catch((err) => this.log.warn('Lưu trạng thái chạy lỗi', { err }));
   }
 
   stopGame(): void {
     this.engine.stop();
     this.log.info('Game dừng');
+    void this.saveRuntime(true).catch((err) => this.log.warn('Lưu trạng thái chạy lỗi', { err }));
   }
 
   async resetSession(): Promise<string> {
@@ -177,6 +301,7 @@ export class GameService {
     await this.store.startSession(id, this.tiktok.state().username);
     this.engine.resetSession(id);
     this.log.info('Reset phiên LIVE', { old, new: id });
+    await this.saveRuntime(true).catch((err) => this.log.warn('Lưu trạng thái chạy lỗi', { err }));
     return id;
   }
 
@@ -291,11 +416,16 @@ export class GameService {
   // --------------------------------------------------------------------------
   /** Kết nối TikTok LIVE thật. Đang chạy demo thì tắt demo trước (không trộn sự kiện giả với LIVE thật). */
   async connectTikTok(username: string): Promise<void> {
+    if (!parseTikTokUsername(username)) {
+      throw new ValidationError('Username TikTok không hợp lệ (ví dụ: @tenkenh hoặc https://www.tiktok.com/@tenkenh/live)');
+    }
     if (this.demo.running) {
       this.demo.stop();
       this.log.info('Tắt demo trước khi kết nối TikTok');
-      this.pushConnectors();
     }
+    // Người chơi demo còn ngồi trong hồ / trên bảng phiên thì gỡ ngay, trước khi sự kiện thật tới.
+    this.leaveDemo();
+    this.pushConnectors();
     await this.tiktok.connect(username);
   }
 
@@ -304,11 +434,11 @@ export class GameService {
   }
 
   /** Bật/tắt demo. Không cho bật khi đang kết nối / đã kết nối TikTok LIVE thật (ConflictError → HTTP 409). */
-  setDemo(running: boolean): void {
+  setDemo(running: boolean, profile: DemoProfile = 'busy'): void {
     if (running && LIVE_STATUSES.has(this.tiktok.state().status)) {
       throw new ConflictError('Đang kết nối TikTok LIVE thật — ngắt kết nối TikTok trước khi bật chế độ demo');
     }
-    if (running) this.demo.start();
+    if (running) this.demo.start(profile);
     else this.demo.stop();
     this.pushConnectors();
   }

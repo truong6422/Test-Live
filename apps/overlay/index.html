@@ -10,42 +10,72 @@
     <div id="stage">
       <div id="scene"></div>
 
+      <!-- Dữ liệu giả lập: chữ chìm phủ cả sân khấu (tĩnh, mờ, dưới HUD). hud.ts dựng chữ khi DEMO bật. -->
+      <div id="demo-watermark" aria-hidden="true" hidden></div>
+
+      <!-- Dải trên cùng (~170px) bị thanh TikTok LIVE che trên điện thoại: chỉ để tiêu đề trang trí. -->
       <header id="hud-top">
         <div class="title-row">
           <h1>🎣 ĐI CÂU THÔI!</h1>
-          <span id="badge-demo" class="badge demo" hidden>DEMO</span>
           <span id="badge-live" class="badge live" hidden>● LIVE</span>
-          <span id="badge-paused" class="badge paused" hidden>TẠM DỪNG</span>
         </div>
-        <div id="demo-ribbon" class="demo-ribbon" hidden>CHẾ ĐỘ DEMO · dữ liệu giả lập, không phải người xem thật</div>
-        <div class="info-row">
-          <span id="bigfish" class="bigfish" hidden>🐋 <span id="bigfish-text">Cá to xuất hiện sau 03:00</span></span>
-          <div id="last-action" class="last-action">💬 Bình luận bất kỳ để thả câu · 🎁 Mỗi món quà có một loài cá riêng</div>
-        </div>
-        <div class="disclaimer">Điểm chỉ để vui, không quy đổi</div>
       </header>
 
-      <div id="boards">
-        <aside class="board kg">
-          <div class="board-head">⚖️ BẢNG CÂN CÁ</div>
-          <ol id="kg-list"></ol>
-        </aside>
-        <aside class="board gift">
-          <div class="board-head">🎁 TOP QUÀ TẶNG</div>
-          <ol id="gift-list"></ol>
-        </aside>
+      <!-- Mọi thứ cần đọc được nằm từ y ≈ 178 trở xuống (dưới thanh TikTok), trên Bến Vàng. -->
+      <div id="hud-stack">
+        <div id="demo-ribbon" class="ribbon demo-ribbon" hidden>
+          <span id="badge-demo" class="badge demo" hidden>DEMO</span> dữ liệu giả lập, không phải người xem thật
+        </div>
+        <div id="badge-paused" class="ribbon paused-ribbon" hidden>⏸ Hồ câu đang tạm dừng, chủ phòng sẽ mở lại ngay</div>
+        <div id="badge-offline" class="ribbon offline-ribbon" hidden>📴 LIVE đang tạm nghỉ, hồ câu sẽ chạy lại khi phát tiếp</div>
+
+        <section id="guide" class="guide">
+          <div class="guide-main">
+            <span class="guide-icon">💬</span>
+            <div class="guide-text">
+              <b>BÌNH LUẬN BẤT KỲ ĐỂ VÀO CÂU</b>
+              <!-- một dòng: lời mời + các mẹo lần lượt thay nhau (hud.ts), khung gọn để không che Bến Vàng -->
+              <span id="guide-line" class="guide-line">Có ngay một ghế bên hồ, cá cắn câu lần lượt</span>
+              <small class="disclaimer">Điểm chỉ để vui, không quy đổi</small>
+            </div>
+            <span id="bigfish" class="bigfish" hidden><small>🐋 Cá to sau</small><span id="bigfish-time">--:--</span></span>
+          </div>
+        </section>
+
+        <!-- Hai bảng ẩn tới khi có dữ liệu (hud.ts bỏ .is-empty / hidden).
+             Thông báo quà/cá to nổi đè lên vùng bảng vài giây: nằm trong phần HUD sẵn có, không che thêm cảnh hồ
+             (kể cả khi camera zoom), xa khung bình luận + cột nút TikTok. -->
+        <div class="under-guide">
+          <div id="boards" hidden>
+            <aside class="board kg is-empty">
+              <div class="board-head">⚖️ BẢNG CÂN CÁ</div>
+              <ol id="kg-list"></ol>
+            </aside>
+            <aside class="board gift is-empty">
+              <div class="board-head">🎁 TOP QUÀ TẶNG</div>
+              <ol id="gift-list"></ol>
+            </aside>
+          </div>
+          <div id="toasts"></div>
+        </div>
       </div>
 
+      <!-- Sự kiện tập thể: cuối mặt hồ, giữa hai bờ (trên vùng khung bình luận TikTok), không đè Bến Vàng. -->
       <section id="collective" class="collective" hidden>
         <div class="collective-head">
           <span id="collective-name">🪢 Cả hồ kéo Cá Thần</span>
           <span id="collective-count">0 / 100</span>
         </div>
-        <div class="bar big"><div id="collective-fill" class="fill haul"></div></div>
+        <div class="bar"><div id="collective-fill" class="fill haul"></div></div>
         <div id="collective-desc" class="collective-desc"></div>
       </section>
 
-      <div id="toasts"></div>
+      <!-- Hồ còn vắng và không có hoạt ảnh: biển hướng dẫn to giữa mặt nước. -->
+      <div id="join-cta" class="join-cta" hidden>
+        <div class="join-big"><span class="bob">💬</span> BÌNH LUẬN ĐỂ VÀO CÂU!</div>
+        <div class="join-sub">Gõ chữ gì cũng được, bạn ngồi ngay bên hồ 🎣</div>
+        <div class="join-sub">Tên bạn hiện dưới chân cần thủ của mình</div>
+      </div>
 
       <div id="conn-error" hidden></div>
     </div>

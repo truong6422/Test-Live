@@ -73,11 +73,22 @@ const short = (name: string, n = 16) => {
 const clean = (name: string) => name.replace(/\s*may mắn/gi, '').trim();
 const fmtKg = (kg: number) => (Math.round(kg * 10) / 10).toLocaleString('vi-VN', { maximumFractionDigits: 1 });
 
+/** Vòng elip bằng các vệt điểm ảnh bắt lưới 4px (cùng kiểu gợn nước trong ảnh nền, không dùng nét vector). */
+function pixelRing(g: Graphics, x: number, y: number, rx: number, ry: number, color: number, alpha: number, dash = 8): void {
+  const n = Math.max(12, Math.min(48, Math.round((rx + ry) * 0.16)));
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU;
+    const px = Math.round((x + Math.cos(a) * rx) / 4) * 4;
+    const py = Math.round((y + Math.sin(a) * ry) / 4) * 4;
+    g.rect(px - dash / 2, py - 2, dash, 4).fill({ color, alpha });
+  }
+}
+
 /** Gợn sóng hình elip lan ra. age 0..1. */
 function ripple(g: Graphics, x: number, y: number, age: number, maxR: number, color = 0xffffff, width = 5): void {
   if (age <= 0 || age >= 1) return;
   const r = 10 + maxR * easeOut(age);
-  g.ellipse(x, y, r, r * 0.32).stroke({ width, color, alpha: 0.9 * (1 - age) });
+  pixelRing(g, x, y, r, r * 0.32, color, Math.ceil(0.9 * (1 - age) * 4) / 4, width + 4);
 }
 
 /** Tia nước bắn (giọt vuông kiểu pixel). age 0..1. */
@@ -374,6 +385,8 @@ function makeTrip(s: SceneRefs, run: RunningAction, spot: Spot | undefined, stan
     w,
     name,
     inPlace,
+    /** Kéo ngay tại ghế bằng ảnh người ngồi (không có người đứng vẽ tay). */
+    seated: !!seated,
     sc,
     dir,
     /**
@@ -520,7 +533,25 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
   big.style.stroke = { color: INK, width: 14 };
   big.style.dropShadow = { color: 0xb4471c, distance: 6, angle: Math.PI / 2, blur: 0, alpha: 1 };
   const killWater = attach(s.waterFx, water, shadow);
-  const killFx = attach(s.fx, rays, rodG, spray, ...(fishG ? [fishG] : []), fireworks, hookText, pullText, big);
+  // mũi tên vàng nhảy trên đầu người tặng (để biết ai trong hàng ghế vừa tặng quà)
+  // vẽ bậc thang theo ô 4px + viền mực đều 4px (cùng kiểu điểm ảnh, không tam giác vector)
+  const marker = new Graphics();
+  for (const [grow, color] of [
+    [4, INK],
+    [0, 0xffd166]
+  ] as const) {
+    marker.rect(-12 - grow, -64 - grow, 24 + grow * 2, 32 + grow).fill(color);
+    for (let i = 0; i < 8; i++) {
+      const w = 56 - i * 8 + grow * 2;
+      marker.rect(-w / 2, -32 + i * 4 - (i === 0 ? grow : 0), w, 4 + (i === 0 ? grow : 0)).fill(color);
+    }
+    if (grow) marker.rect(-6, 0, 12, 4).fill(color);
+  }
+  marker.rect(-8, -60, 6, 20).fill(0xfff3c4);
+  marker.visible = false;
+  const killFx = attach(s.fx, marker, rodG, spray, ...(fishG ? [fishG] : []));
+  // chữ + tia sáng + pháo hoa: lớp không zoom → không bị phóng to tràn khỏi màn hình khi camera zoom vào người tặng
+  const killScreen = attach(s.screenFx, rays, fireworks, hookText, pullText, big);
 
   // dưới đáy hồ (chỉ Cá Thần huyền thoại): cảnh cắt Cá Thần đớp mồi
   const uLine = new Graphics();
@@ -543,6 +574,9 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
     };
   });
   const turns = 1 + Math.floor(lvl / 2);
+  /** Quà tặng của một người cụ thể (không phải cá to định kỳ / cả hồ) → camera zoom thẳng vào người tặng. */
+  const camOn = !crowd && !tier.event && !!run.actor;
+  const camZoom = Math.min(1.9, 1.6 + lvl * 0.04);
   const shakeMax = Math.min(1, 0.2 + lvl * 0.1);
 
   return {
@@ -552,10 +586,6 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
       const fighting = p >= FIGHT && p < BURST;
       const k = s.king;
       if (isKing) k.visible = true;
-
-      // ---------- băng rôn đầu ----------
-      const top = tier.event ? `🐋 CÁ TO XUẤT HIỆN!\n${who} đang kéo...` : `🎣 ${run.actionName.toUpperCase()}\n${who}`;
-      showBanner(s, p < FIGHT + 0.06 && !(legend && p >= 0.13 && p < 0.29), top);
 
       // ---------- thời tiết theo bậc ----------
       const sky = seg(p, BITE, FIGHT) * (1 - seg(p, SHOW_END, 0.98));
@@ -619,7 +649,7 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
         const rings = 2 + Math.ceil(lvl / 2);
         for (let j = 0; j < rings; j++) {
           const R = 50 + j * (36 + lvl * 6);
-          water.ellipse(hook.x, hook.y + 20, R, R * 0.32).stroke({ width: 5, color: 0xdff6ff, alpha: 0.6 * vortex });
+          pixelRing(water, hook.x, hook.y + 20, R, R * 0.32, 0xdff6ff, 0.6 * vortex);
           for (let i = 0; i < 5; i++) {
             const a = ms / (220 + j * 70) + (i / 5) * TAU + j;
             water.rect(hook.x + Math.cos(a) * R - 6, hook.y + 20 + Math.sin(a) * R * 0.32 - 4, 12, 8).fill({ color: 0xffffff, alpha: vortex });
@@ -651,7 +681,9 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
           const kk = (ms / 900 + i / (5 + lvl)) % 1;
           const bx = hook.x + Math.sin(i * 2.7 + ms / 300) * (40 + lvl * 8);
           const by = hook.y + 30 - kk * 50;
-          spray.circle(bx, by, 4 + (i % 3) * 3).stroke({ width: 3, color: 0xffffff, alpha: 1 - kk });
+          // bong bóng nước: ô vuông rỗng kiểu pixel
+          const r = 4 + (i % 3) * 4;
+          spray.rect(Math.round(bx / 4) * 4 - r, Math.round(by / 4) * 4 - r, r * 2, r * 2).stroke({ width: 4, color: 0xffffff, alpha: 1 - kk, alignment: 1 });
         }
       }
       // cú phóng khỏi mặt nước: bọt lớn
@@ -733,6 +765,8 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
       const tension = fighting ? 0.6 + 0.4 * Math.abs(Math.sin(ms / 120)) : p >= BITE && p < FIGHT ? 0.25 : 0;
       const lineEnd = p < BURST ? hook : { x: fx, y: fy };
       const lineOn = p >= BITE && p < APEX + 0.02;
+      // người ngồi kéo tại ghế: giấu cần thường của họ trong lúc vẽ cần cong (khỏi thấy hai cần)
+      if (trip?.seated && spot) s.anglers.setRodHidden(spot, p >= BITE && p < SHOW_END);
       if (trip && p >= BITE && p < SHOW_END) {
         const L = 200 * trip.sc;
         const dirX = F.x >= hand.x ? 1 : -1;
@@ -804,6 +838,33 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
         sparkle(fireworks, apex.x + Math.cos(a) * (tier.len * 0.7 + 90), apex.y + Math.sin(a) * 90, 10 + (i % 2) * 6, 0.9);
       }
 
+      // ---------- camera ----------
+      let zoomed = false;
+      if (camOn) {
+        const walking = !!trip && trip.w.visible;
+        const headY = trip ? trip.headY() : spot ? spot.y - 80 * spot.s : 0;
+        const me = walking ? { x: trip!.w.x, y: (headY + trip!.w.y) / 2 } : spot ? { x: spot.x, y: (headY + spot.y) / 2 } : null;
+        marker.visible = !!me && p < BURST;
+        s.anglers.spotlight(spot && p < SHOW_END ? spot : null);
+        if (me) {
+          marker.position.set(me.x, headY - 12 - Math.abs(Math.sin(ms / 180)) * 10);
+          marker.scale.set(0.6);
+        }
+        if (me && p < SHOW_END) {
+          zoomed = true;
+          // người tặng nằm giữa vùng thấy được trên điện thoại (dưới HUD trên ≈ 560, trên khung bình luận ≈ 1540);
+          // thông báo quà HTML giờ nằm ngay dưới khung hướng dẫn nên không cần đẩy người xuống thấp nữa
+          if (p < BURST) s.camera.focus(run.runId, me.x, me.y, camZoom, 1060);
+          // cá phóng lên: lùi ra một chút, nhìn cả người kéo lẫn con cá
+          else s.camera.focus(run.runId, (me.x + apex.x) / 2, (me.y + apex.y) / 2, 1.3);
+        } else s.camera.release(run.runId);
+      }
+
+      // ---------- băng rôn đầu ----------
+      // Đang zoom vào người tặng: thông báo quà HTML đã có tên + quà → ẩn băng rôn cảnh cho khỏi trùng.
+      const top = tier.event ? `🐋 CÁ TO XUẤT HIỆN!\n${who} đang kéo...` : `🎣 ${run.actionName.toUpperCase()}\n${who}`;
+      showBanner(s, !zoomed && p < FIGHT + 0.06 && !(legend && p >= 0.13 && p < 0.29), top);
+
       // ---------- chữ ----------
       const wy = trip ? trip.headY() - 70 : LAKE_SPOTS.waterBottomY - 60;
       const wx = trip ? Math.max(150, Math.min(930, trip.w.x)) : 540;
@@ -818,13 +879,26 @@ function bigPull(s: SceneRefs, run: RunningAction, tier: Tier): ActionAnim {
         pullText.alpha = 1;
       } else pullText.visible = false;
       pop(big, p, APEX - 0.02, SHOW_END + 0.04, 540, bannerY, 0);
+      if (big.visible && big.width > 1020) big.scale.set((big.scale.x * 1020) / big.width);
+      // chữ bám theo người / lưỡi câu: đổi sang toạ độ màn hình rồi giữ trọn trong khung
+      for (const tx of [hookText, pullText]) {
+        if (!tx.visible) continue;
+        const q = s.camera.toScreen(tx.x, tx.y);
+        const hw = tx.width / 2 + 16;
+        // HUD (hướng dẫn + bảng) kết thúc ở y ≤ 560: giữ cả chiều cao chữ ở dưới mép đó
+        tx.position.set(Math.max(hw, Math.min(1080 - hw, q.x)), Math.max(575 + tx.height / 2, Math.min(1480, q.y)));
+      }
     },
     finish() {
       trip?.done();
+      if (trip?.seated && spot) s.anglers.setRodHidden(spot, false);
       killFx();
+      killScreen();
       killWater();
       killU();
       if (crowd) s.anglers.pullAll(0);
+      s.camera.release(run.runId);
+      if (camOn) s.anglers.spotlight(null);
       restore(s, base);
     }
   };

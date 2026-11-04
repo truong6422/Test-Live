@@ -1,6 +1,6 @@
-import { Container, Graphics, GraphicsContext, Sprite, Text, type TextStyleOptions } from 'pixi.js';
+import { Container, Graphics, GraphicsContext, Rectangle, Sprite, Text, Texture, type TextStyleOptions } from 'pixi.js';
 import type { Mood } from '@cau/shared';
-import { AnglerField, bankEdge, FRONT, shirtFor, SHIRTS, TAG, useImageGeometry, Walker, WATER } from './angler';
+import { AnglerField, bankEdge, FRONT, mix, shirtFor, SHIRTS, TAG, useImageGeometry, Walker, WATER } from './angler';
 import { lakeBackground } from './assets';
 import type { LakeSpots, SceneRefs, Underwater, Weather } from './contract';
 import { King } from './king';
@@ -12,11 +12,11 @@ export { SHIRTS, TAG, shirtFor };
 /*
  * Bố cục sân khấu 1080×1920 (dọc), hoàng hôn làng quê:
  *   0–560      trời (HUD trên phủ phần lớn)
- *   560–716    bờ xa: rặng tre, cây, cống xả; sàn tre "CHIẾU VIP" (người tặng quà nhiều / câu lâu nhất) ngồi nhìn ra người xem
+ *   560–716    bờ xa: rặng tre, cây, cống xả; sàn tre "BẾN VÀNG" (người tặng quà nhiều / câu lâu nhất) ngồi nhìn ra người xem
  *   716–1460   mặt hồ; hai bờ trái/phải xiên nhẹ, cần thủ ngồi dọc mép nước (tối đa ~24 người mỗi bên)
  *   1460–1920  bờ gần: bãi cỏ (vùng giao diện TikTok che) — chỉ có đồ trang trí, người tặng quà đứng ở mép nước giữa
  * Phần tĩnh gộp thành texture (cacheAsTexture). Có ảnh public/bg/lake.png thì ảnh đó thay TOÀN BỘ phần tĩnh vẽ tay
- * (trời, bờ xa, hai bờ, nền nước, bờ gần, khung cống, sàn chiếu VIP + biển tên); chỉ giữ các lớp động
+ * (trời, bờ xa, hai bờ, nền nước, bờ gần, khung cống, sàn Bến Vàng + biển tên); chỉ giữ các lớp động
  * (lấp lánh/gợn sóng, thời tiết, bóng cá, cửa cống khi mở, thuyền, cần thủ, hiệu ứng).
  */
 
@@ -236,7 +236,42 @@ function drawBanks(g: Graphics): void {
   }
 }
 
-/** Sàn tre "CHIẾU VIP" trên bờ xa (chỉ vẽ khi không có ảnh nền). */
+/**
+ * Ván gỗ phủ lên tấm chiếu đỏ của ảnh nền. Chiếu là hình thang: mép trên y≈656 (x 439–640), mép dưới y≈722
+ * (x 418–661) kể cả nét mực. Thay vì vẽ ván "giống giống", kéo giãn đúng một cột điểm ảnh sàn tre ngay bên trái
+ * chiếu (x=412 — cùng hàng ván, cùng màu, cùng bóng) phủ kín x 412–668, y 652–728 → liền mạch với sàn trong ảnh,
+ * rồi thêm mối nối ván so le đúng kiểu của ảnh (vạch tối 3px + viền sáng 1px, chỉ trên phần sáng của ván).
+ */
+const MAT = { x0: 412, x1: 668, y0: 652, y1: 728, srcX: 412 } as const;
+/** Phần sáng của từng hàng ván trên ảnh (đo tại x=412): [đầu, cuối). */
+const PLANK_ROWS: [number, number][] = [
+  [652, 656],
+  [660, 664],
+  [668, 676],
+  [680, 684],
+  [688, 696],
+  [700, 704],
+  [708, 716],
+  [720, 728]
+];
+function deckPatch(photo: Texture): Container {
+  const root = new Container();
+  const strip = new Texture({ source: photo.source, frame: new Rectangle(MAT.srcX, MAT.y0, 1, MAT.y1 - MAT.y0) });
+  const sp = new Sprite(strip);
+  sp.position.set(MAT.x0, MAT.y0);
+  sp.width = MAT.x1 - MAT.x0;
+  sp.height = MAT.y1 - MAT.y0;
+  const g = new Graphics();
+  PLANK_ROWS.forEach(([a, b], i) => {
+    for (let x = MAT.x0 + 22 + ((i * 37) % 58); x < MAT.x1 - 12; x += 58 + ((i * 13) % 20)) {
+      g.rect(x, a, 3, b - a).fill(0x6b4c2d).rect(x + 3, a, 1, b - a).fill(0x9d7949);
+    }
+  });
+  root.addChild(sp, g);
+  return root;
+}
+
+/** Sàn tre "BẾN VÀNG" trên bờ xa (chỉ vẽ khi không có ảnh nền). */
 function drawVipDeck(g: Graphics): void {
   const x0 = FRONT.x0 - 18;
   const x1 = FRONT.x1 + 18;
@@ -247,11 +282,7 @@ function drawVipDeck(g: Graphics): void {
   // mặt sàn tre
   block(g, x0, top, x1 - x0, bot - top - 14, 0xd9b45a, INK, 4);
   for (let x = x0 + 6; x < x1; x += 14) g.rect(x, top, 3, bot - top - 14).fill(0xc49a44);
-  // chiếu đỏ viền vàng
-  const m = 10;
-  block(g, x0 + m, top + 10, x1 - x0 - 2 * m, bot - top - 34, 0xb8323a, 0xf5c211, 3);
-  for (let x = x0 + m + 12; x < x1 - m - 12; x += 24) g.rect(x, top + 22, 8, 8).fill(0xf5c211).rect(x + 2, top + 24, 4, 4).fill(0xb8323a);
-  // mép trước sàn (bó tre)
+  // mép trước sàn (bó tre) — Bến Vàng là bến gỗ, không trải chiếu
   g.rect(x0 - 4, bot - 18, x1 - x0 + 8, 12).fill(INK).rect(x0, bot - 16, x1 - x0, 8).fill(0xb08a40);
   for (let x = x0; x < x1; x += 22) g.rect(x, bot - 16, 2, 8).fill(0x7a5a2a);
   // cột đèn lồng hai đầu
@@ -409,6 +440,156 @@ function buildUnderwater(): Underwater & { tick(dt: number): void } {
 }
 
 // ---------------------------------------------------------------------------
+// Màu hồ theo giờ thật (giờ máy chạy OBS). Ảnh nền là cảnh hoàng hôn → phủ màu lên trời + mặt nước
+// và nhuộm cả cảnh; mốc giữa các giờ nội suy mượt. Thử giờ khác: ?hour=13 (hoặc 13.5).
+// ---------------------------------------------------------------------------
+interface Daylight {
+  /** Màu + độ phủ lên bầu trời (phía trên mặt nước). */
+  sky: number;
+  skyA: number;
+  /** Màu + độ phủ lên mặt nước. */
+  water: number;
+  waterA: number;
+  /** Nhuộm toàn cảnh nền (nhân màu; trắng = giữ nguyên). */
+  tint: number;
+  /** Nhuộm người + bảng tên (nhẹ hơn nền để vẫn đọc được tên). */
+  people: number;
+}
+const NIGHT: Daylight = { sky: 0x070b26, skyA: 0.62, water: 0x08183a, waterA: 0.6, tint: 0x7f8cc4, people: 0xc4cbea };
+const DAWN: Daylight = { sky: 0xffb59c, skyA: 0.28, water: 0x9ec3e0, waterA: 0.3, tint: 0xfff0ea, people: 0xffffff };
+const DAY: Daylight = { sky: 0x8fd3ff, skyA: 0.55, water: 0x2f93c6, waterA: 0.6, tint: 0xffffff, people: 0xffffff };
+const GOLDEN: Daylight = { sky: 0xffffff, skyA: 0, water: 0xffffff, waterA: 0, tint: 0xffffff, people: 0xffffff };
+const DUSK: Daylight = { sky: 0x3a2c6e, skyA: 0.45, water: 0x23285e, waterA: 0.42, tint: 0xb3a9d6, people: 0xe6e2f4 };
+const DAY_KEYS: [number, Daylight][] = [
+  [0, NIGHT],
+  [4.5, NIGHT],
+  [6, DAWN],
+  [8.5, DAY],
+  [15.5, DAY],
+  [17.3, GOLDEN],
+  [18.4, GOLDEN],
+  [19.4, DUSK],
+  [20.8, NIGHT],
+  [24, NIGHT]
+];
+function mixColor(a: number, b: number, k: number): number {
+  const ch = (sh: number) => Math.round(((a >> sh) & 255) + ((((b >> sh) & 255) - ((a >> sh) & 255)) * k));
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+/** Bầu trời + mặt nước của giờ `hour` (0..24, số thực). */
+export function daylightAt(hour: number): Daylight {
+  const h = ((hour % 24) + 24) % 24;
+  let i = 0;
+  while (i < DAY_KEYS.length - 2 && DAY_KEYS[i + 1]![0] <= h) i++;
+  const [h0, a] = DAY_KEYS[i]!;
+  const [h1, b] = DAY_KEYS[i + 1]!;
+  const k = h1 > h0 ? (h - h0) / (h1 - h0) : 0;
+  return {
+    sky: mixColor(a.sky, b.sky, k),
+    skyA: a.skyA + (b.skyA - a.skyA) * k,
+    water: mixColor(a.water, b.water, k),
+    waterA: a.waterA + (b.waterA - a.waterA) * k,
+    tint: mixColor(a.tint, b.tint, k),
+    people: mixColor(a.people, b.people, k)
+  };
+}
+/** Tâm các cọc chống sàn Bến Vàng trên ảnh nền (đo trên lake.png, chân cọc tới y≈780). */
+const DECK_POSTS = [376, 484, 594, 703];
+const FORCED_HOUR =Number(new URLSearchParams(location.search).get('hour'));
+/**
+ * Mặt nạ trời + nước tách từ ảnh nền (1 lần lúc khởi động): điểm ảnh không phải màu xanh lá (cỏ, cây, lá sen)
+ * và không quá tối (bóng cây, nét mực) → được phủ màu theo giờ. Bỏ qua nhà chòi, sàn Bến Vàng, lối đất hai bên.
+ */
+function toneMasks(photo: Texture, waterTop: number, waterBottom: number): { sky: Texture; water: Texture } | null {
+  const src = photo.source.resource as CanvasImageSource | undefined;
+  if (!src) return null;
+  const W = 1080;
+  const H = 1700;
+  const read = document.createElement('canvas');
+  read.width = W;
+  read.height = H;
+  const rc = read.getContext('2d', { willReadFrequently: true });
+  if (!rc) return null;
+  rc.drawImage(src, 0, 0, W, 1920); // ảnh trải đúng khung 1080×1920 như sprite nền, chỉ đọc phần trên H
+  const px = rc.getImageData(0, 0, W, H).data;
+  const isOpen = (i: number) => {
+    const r = px[i]!;
+    const g = px[i + 1]!;
+    const b = px[i + 2]!;
+    return !(g > r && g > b * 0.9) && r + g + b >= 120; // bỏ cỏ, cây, lá sen, bóng tối, nét mực
+  };
+  /**
+   * Loang từ các điểm mầm qua những điểm ảnh "trời / nước" liền nhau, dừng ở viền mực bờ hồ, cây, cỏ.
+   * Nhờ vậy mặt nạ ôm đúng hình mặt nước (không còn mép chữ nhật / dải sọc ở bờ đất).
+   */
+  // Một ngăn xếp + một mảng "đã thấy" dùng chung cho cả hai lần loang (đánh dấu lúc đẩy vào → mỗi điểm ảnh vào
+  // ngăn xếp tối đa 1 lần, không phình bộ nhớ hàng chục MB như đẩy trùng lặp).
+  const seen = new Uint8Array(W * H);
+  const stack = new Int32Array(W * H);
+  const fill = (seeds: [number, number][], allow: (x: number, y: number) => boolean) => {
+    seen.fill(0);
+    let sp = 0;
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext('2d')!;
+    const out = ctx.createImageData(W, H);
+    const d = out.data;
+    const push = (p: number, x: number, y: number) => {
+      if (seen[p]) return;
+      seen[p] = 1;
+      if (allow(x, y) && isOpen(p * 4)) stack[sp++] = p;
+    };
+    for (const [x, y] of seeds) push(y * W + x, x, y);
+    while (sp > 0) {
+      const p = stack[--sp]!;
+      const x = p % W;
+      const y = (p - x) / W;
+      d[p * 4] = d[p * 4 + 1] = d[p * 4 + 2] = d[p * 4 + 3] = 255;
+      if (x > 0) push(p - 1, x - 1, y);
+      if (x < W - 1) push(p + 1, x + 1, y);
+      if (y > 0) push(p - W, x, y - 1);
+      if (y < H - 1) push(p + W, x, y + 1);
+    }
+    ctx.putImageData(out, 0, 0);
+    const tex = Texture.from(c);
+    // khi camera zoom, mép mặt nạ vẫn sắc cạnh như điểm ảnh của ảnh nền
+    tex.source.scaleMode = 'nearest';
+    return tex;
+  };
+  const deck = (x: number, y: number) => x > 345 && x < 735 && y > 645 && y < waterTop + 10;
+  /** Sàn Bến Vàng + mép trước + cọc chống thò xuống nước (gỗ — không phủ màu nước lên). */
+  const deckFront = (x: number, y: number) => x >= 350 && x <= 738 && y < FRONT.deckBottom + 2;
+  const deckPost = (x: number, y: number) => y < FRONT.deckBottom + 23 && DECK_POSTS.some((px) => Math.abs(x - px) <= 11);
+  const hut = (x: number, y: number) => x < 270 && y > 490;
+  const gate = (x: number, y: number) => x > 850 && x < 960 && y > 600;
+  const skySeeds: [number, number][] = Array.from({ length: 27 }, (_, i) => [20 + i * 40, 4]);
+  const waterSeeds: [number, number][] = [];
+  // mầm phủ cả bề ngang mặt nước (mép phải gần cống bị bụi sậy chắn → cần mầm riêng)
+  for (let y = waterTop + 60; y < waterBottom - 20; y += 60) for (let x = 170; x <= 920; x += 50) waterSeeds.push([x, y]);
+  return {
+    sky: fill(skySeeds, (x, y) => y < waterTop && !deck(x, y) && !hut(x, y) && !gate(x, y)),
+    water: fill(
+      waterSeeds,
+      (x, y) =>
+        y >= waterTop &&
+        y < waterBottom + 30 &&
+        x >= bankEdge('left', y) - 8 &&
+        x <= bankEdge('right', y) + 8 &&
+        !deckFront(x, y) &&
+        !deckPost(x, y) &&
+        !(gate(x, y) && y < waterTop + 24) // chỉ chân cống sát mép nước, không loại cả dải nước bên phải
+    )
+  };
+}
+
+function currentHour(): number {
+  if (Number.isFinite(FORCED_HOUR) && new URLSearchParams(location.search).has('hour')) return FORCED_HOUR;
+  const d = new Date();
+  return d.getHours() + d.getMinutes() / 60;
+}
+
+// ---------------------------------------------------------------------------
 // Dựng toàn cảnh
 // ---------------------------------------------------------------------------
 export function buildLake(): SceneRefs {
@@ -434,7 +615,7 @@ export function buildLake(): SceneRefs {
     drawBanks(banks);
     bg.addChild(sky, water, banks);
   }
-  // cống xả (khung) + sàn chiếu VIP: chỉ vẽ khi không có ảnh nền (ảnh nền đã có sẵn)
+  // cống xả (khung) + sàn Bến Vàng: chỉ vẽ khi không có ảnh nền (ảnh nền đã có sẵn)
   const gate = LAKE_SPOTS.floodgate;
   const props = new Graphics();
   props.visible = !photo;
@@ -442,13 +623,16 @@ export function buildLake(): SceneRefs {
   props.rect(gate.x - 52, gate.y - 76, 104, 8).fill(0xb8b6b2);
   props.rect(gate.x - 34, gate.y - 60, 68, 56).fill(0x1f2a30);
   drawVipDeck(props);
-  const vipSign = label('CHIẾU VIP', { fontSize: 19, fill: 0xffd166 });
+  const vipSign = label('BẾN VÀNG', { fontSize: 19, fill: 0xffd166 });
+  vipSign.resolution = 2;
   vipSign.anchor.set(0.5);
   vipSign.position.set(FRONT.x0 - 18 + 79, FRONT.deckTop - 42);
   const gateSign = label('CỐNG', { fontSize: 14, fill: INK });
   gateSign.anchor.set(0.5);
   gateSign.position.set(gate.x, gate.y - 72);
   gateSign.visible = !photo;
+  // ảnh nền có tấm chiếu đỏ giữa sàn tre → lát ván gỗ đè lên để thành bến gỗ "Bến Vàng" (không giống chiếu bạc)
+  const deckCover = photo ? deckPatch(photo) : new Container();
   if (photo) {
     // nhãn nhỏ phía trên sàn tre của ảnh
     // trên đầu các VIP (người ngồi cao ≈ 68·scale, nón thêm chút), luôn dưới dải HUD trên (kết thúc ≈ y 560)
@@ -457,8 +641,45 @@ export function buildLake(): SceneRefs {
     // ảnh cần thủ cao 84 đơn vị (gồm nón) → nhãn nằm hẳn trên đỉnh nón
     vipSign.position.set(540, Math.min(578, FRONT.feetY - 84 * (FRONT.scale || 1) - 24));
   }
-  bg.addChild(props, vipSign, gateSign);
+  bg.addChild(props, deckCover, gateSign);
   lake.addChild(bg);
+
+  // lớp màu theo giờ: trời (trên mặt nước) + mặt nước (theo mép bờ gốc), vẽ trắng rồi đổi tint/alpha
+  // có ảnh nền: mặt nạ tách đúng trời / nước từ ảnh; không có: khối chữ nhật theo mép bờ
+  const masks = photo ? toneMasks(photo, WATER.top, WATER.bottom) : null;
+  let skyTone: Container;
+  let waterTone: Container;
+  if (masks) {
+    skyTone = new Sprite(masks.sky);
+    waterTone = new Sprite(masks.water);
+  } else {
+    skyTone = new Graphics().rect(0, 0, 1080, WATER.top + 4).fill(0xffffff);
+    const wg = new Graphics();
+    for (let y = WATER.top; y < WATER.bottom; y += 6) {
+      const x0 = bankEdge('left', y);
+      wg.rect(x0, y, bankEdge('right', y) - x0, 6);
+    }
+    waterTone = wg.fill(0xffffff);
+  }
+  // biển "BẾN VÀNG" nằm trên lớp màu trời (không bị phủ mờ), nhuộm theo giờ như người ngồi
+  lake.addChild(skyTone, waterTone, vipSign);
+  let toneAt = -1e9;
+  const applyDaylight = () => {
+    const d = daylightAt(currentHour());
+    skyTone.tint = d.sky;
+    skyTone.alpha = d.skyA;
+    skyTone.visible = d.skyA > 0.01;
+    waterTone.tint = d.water;
+    waterTone.alpha = d.waterA;
+    waterTone.visible = d.waterA > 0.01;
+    bg.tint = d.tint;
+    peopleTint = d.people;
+    vipSign.tint = d.people;
+    // lấp lánh: ban ngày trắng ngà, chạng vạng/đêm theo màu nước (không còn đốm trắng chói trên mặt hồ tối)
+    sparkleLayer.tint = mixColor(0xfff2c8, d.water, Math.min(1, d.waterA * 1.2));
+    sparkleLayer.alpha = 1 - d.waterA * 0.75;
+  };
+  let peopleTint = 0xffffff;
 
   // mây giông (phủ dần khi gọi bão)
   const stormClouds = new Graphics();
@@ -483,15 +704,24 @@ export function buildLake(): SceneRefs {
   stream.visible = false;
   lake.addChild(stream, gateDoor);
 
-  // lấp lánh / gợn sóng mặt nước (vẽ lại cách khung)
-  const waterAnim = new Graphics();
-  lake.addChild(waterAnim);
-  const sparkles = Array.from({ length: 56 }, (_, i) => {
-    const h = hash(`sp${i}`);
-    const y = WATER.top + 20 + (h % (WATER.bottom - WATER.top - 40));
-    const x0 = bankEdge('left', y) + 20;
-    const x1 = bankEdge('right', y) - 20;
-    return { x: x0 + ((h >> 6) % Math.max(1, Math.round(x1 - x0))), y, ph: (h >> 3) % 628 / 100, w: 8 + (h % 3) * 6 };
+  // Lấp lánh mặt nước: mỗi đốm là một Sprite trắng 1px (gộp chung một lô vẽ, không dựng lại hình mỗi khung).
+  // Vị trí rải bằng mix() — hash() thô cho các chuỗi "sp0".."sp9" gần như cùng x nên trước đây các đốm
+  // xếp thành cột trắng lạ trên mặt hồ. Toạ độ bắt theo lưới 4px như điểm ảnh của ảnh nền.
+  const sparkleLayer = new Container();
+  lake.addChild(sparkleLayer);
+  const sparkles = Array.from({ length: 40 }, (_, i) => {
+    const h = mix(hash(`sp${i}`) + i * 7919);
+    const y = Math.round((WATER.top + 40 + (h % (WATER.bottom - WATER.top - 80))) / 4) * 4;
+    const x0 = bankEdge('left', y) + 40;
+    const x1 = bankEdge('right', y) - 40;
+    const x = Math.round((x0 + ((h >>> 11) % Math.max(1, Math.round(x1 - x0)))) / 4) * 4;
+    const sp = new Sprite(Texture.WHITE);
+    sp.position.set(x, y);
+    sp.width = 8 + ((h >>> 5) % 3) * 4;
+    sp.height = 4;
+    sp.visible = false;
+    sparkleLayer.addChild(sp);
+    return { sp, x, ph: ((h >>> 3) % 628) / 100 };
   });
 
   // bóng cá to
@@ -540,7 +770,10 @@ export function buildLake(): SceneRefs {
   const fx = new Container();
   lake.addChild(fx);
 
-  bg.cacheAsTexture(true);
+  // Nền vẽ tay: hàng nghìn hình chữ nhật → gộp 1 texture (nearest để zoom camera vẫn sắc điểm ảnh).
+  // Có ảnh nền: KHÔNG cache — nền chỉ là 1 sprite + miếng ván, vẽ thẳng rẻ hơn giữ thêm texture 1080×1920 (8 MB GPU),
+  // và khi camera zoom ảnh được lấy mẫu nearest trực tiếp (không bị nhoè như phóng to texture cache).
+  if (!photo) bg.cacheAsTexture({ scaleMode: 'nearest' });
 
   // ----- Đáy hồ -----
   const underwater = buildUnderwater();
@@ -558,22 +791,55 @@ export function buildLake(): SceneRefs {
   const bannerText = label('', { fontSize: 44, fill: INK, align: 'center' });
   bannerText.anchor.set(0.5);
   banner.addChild(bannerG, bannerText);
-  // giữa mặt hồ, dưới chiếu VIP (không che mặt người ngồi chiếu)
+  // giữa mặt hồ, dưới Bến Vàng (không che mặt người ngồi Bến Vàng)
   banner.position.set(540, 1010);
   let bannerKey = '\u0000';
   /** Khung băng rôn ôm theo chữ (1 hoặc 2 dòng), tối đa gần hết bề ngang hồ. */
   const fitBanner = () => {
-    if (bannerText.text === bannerKey) return;
-    bannerKey = bannerText.text;
+    // hồ đông → mặt nước hẹp lại (cầu ván hai bờ): băng rôn không rộng quá mặt nước, khỏi che người ngồi hai bờ
+    const avail = Math.round(bankEdge('right', banner.y) - bankEdge('left', banner.y)) - 16;
+    const key = `${bannerText.text}|${avail}`;
+    if (key === bannerKey) return;
+    bannerKey = key;
+    const maxText = Math.min(760, avail - 64);
     bannerText.scale.set(1);
-    if (bannerText.width > 760) bannerText.scale.set(760 / bannerText.width);
-    const w = Math.max(420, Math.ceil(bannerText.width) + 64);
+    if (bannerText.width > maxText) bannerText.scale.set(maxText / bannerText.width);
+    const w = Math.min(avail, Math.max(420, Math.ceil(bannerText.width) + 64));
     const h = Math.ceil(bannerText.height) + 28;
     bannerG.clear();
     block(bannerG, -w / 2, -h / 2, w, h, 0xffd166, INK, 6);
   };
   banner.visible = false;
-  root.addChild(flashG, fade, banner);
+  const screenFx = new Container();
+  root.addChild(screenFx, flashG, fade, banner);
+
+  // ----- Camera: zoom vào người tặng quà -----
+  // Điểm nhìn đặt giữa vùng thấy được trên điện thoại (dưới HUD trên ≈ 560, trên khung bình luận ≈ 1540).
+  const CAM_SCREEN = { x: 540, y: 1060 };
+  const cam = { x: 540, y: 960, z: 1, sy: CAM_SCREEN.y, tx: 540, ty: 960, tz: 1, tsy: CAM_SCREEN.y, owner: '' };
+  /** Cho phép đẩy cảnh xuống tối đa chừng này px (dải trên cùng nằm sau thanh TikTok + HUD nên không lộ). */
+  const CAM_MAX_DOWN = 240;
+  const tickCamera = (dtMs: number) => {
+    if (cam.z === 1 && cam.tz === 1) return;
+    const k = 1 - Math.exp(-dtMs / 260);
+    cam.z += (cam.tz - cam.z) * k;
+    if (cam.tz > 1) {
+      cam.x += (cam.tx - cam.x) * k;
+      cam.y += (cam.ty - cam.y) * k;
+      cam.sy += (cam.tsy - cam.sy) * k;
+    }
+    if (cam.tz === 1 && cam.z < 1.003) cam.z = 1;
+    const z = cam.z;
+    // giữ khung hình luôn phủ kín sân khấu (không lộ mép)
+    const px = Math.max(1080 - 1080 * z, Math.min(0, CAM_SCREEN.x - cam.x * z));
+    const py = Math.max(1920 - 1920 * z, Math.min(CAM_MAX_DOWN * (z - 1), cam.sy - cam.y * z));
+    lake.scale.set(z);
+    lake.position.set(px, py);
+    // đang zoom (hoạt ảnh kéo cá đã ẩn băng rôn khi zoom vào người tặng): nếu còn băng rôn thì đẩy lên sát HUD
+    banner.y = cam.tz > 1 ? 680 : 1010;
+    // zoom vào người tặng: biển "BẾN VÀNG" lộ ra dưới HUD, dính vào mũi tên chỉ người tặng → ẩn trong lúc zoom
+    vipSign.visible = z < 1.05;
+  };
 
   // ----- Trạng thái động -----
   let t = 0;
@@ -641,12 +907,15 @@ export function buildLake(): SceneRefs {
   };
 
   const tickWater = () => {
-    waterAnim.clear();
     for (const s of sparkles) {
       const a = Math.sin(t * 0.0025 + s.ph);
-      if (a < 0.35) continue;
-      const dx = Math.sin(t * 0.0008 + s.ph) * 8;
-      waterAnim.rect(s.x + dx, s.y, s.w, 3).fill({ color: 0xffffff, alpha: (a - 0.35) * 0.9 });
+      // hồ đông dựng cầu ván lấn vào hồ → đốm nằm dưới cầu thì tắt
+      const on = a >= 0.35 && s.x > bankEdge('left', s.sp.y) + 16 && s.x < bankEdge('right', s.sp.y) - 32;
+      s.sp.visible = on;
+      if (!on) continue;
+      s.sp.x = s.x + Math.round(Math.sin(t * 0.0008 + s.ph) * 2) * 4;
+      // nấc alpha rời rạc như ảnh pixel (không mờ dần mượt)
+      s.sp.alpha = Math.ceil((a - 0.35) * 4) * 0.14;
     }
   };
 
@@ -713,6 +982,24 @@ export function buildLake(): SceneRefs {
       walkers.delete(w as Walker);
       w.destroy({ children: true });
     },
+    camera: {
+      focus(owner, x, y, zoom, screenY) {
+        cam.owner = owner;
+        cam.tsy = screenY ?? CAM_SCREEN.y;
+        cam.tx = x;
+        cam.ty = y;
+        cam.tz = Math.max(1, Math.min(2.2, zoom));
+      },
+      release(owner) {
+        if (cam.owner !== owner) return;
+        cam.owner = '';
+        cam.tz = 1;
+      },
+      toScreen(x, y) {
+        return { x: lake.x + x * lake.scale.x, y: lake.y + y * lake.scale.y };
+      }
+    },
+    screenFx,
     setShake(k) {
       shake = clamp01(k);
       if (shake === 0) root.position.set(0, 0);
@@ -753,9 +1040,18 @@ export function buildLake(): SceneRefs {
       if (shake > 0) root.position.set((Math.random() - 0.5) * 2 * shake * 14, (Math.random() - 0.5) * 2 * shake * 10);
       if (underwater.root.visible) underwater.tick(dtMs);
       if (banner.visible) fitBanner();
+      tickCamera(dtMs);
+      // màu theo giờ: cập nhật mỗi 20 giây
+      if (t - toneAt > 20000) {
+        toneAt = t;
+        applyDaylight();
+        seatsLayer.tint = peopleTint;
+        walkersLayer.tint = peopleTint;
+      }
       if (!lake.visible) return;
       if (frame % 2 === 0) tickWater();
-      king.tick(dtMs);
+      // Cá Thần chỉ hiện khi đang kéo Cá Thần — ẩn thì khỏi tính (tick vẽ lại mặt nạ mỗi khung)
+      if (king.visible) king.tick(dtMs);
       anglers.tick(dtMs);
       for (const w of walkers) if (w.visible) w.tick(dtMs);
       tickShadow(dtMs);

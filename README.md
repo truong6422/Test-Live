@@ -22,7 +22,7 @@ Thiết kế chi tiết: `docs/fishing-design.md`.
 | 🦈 Cá lăng khủng | 3 | 10–30 | 10 |
 | 👑 Cá Koi vàng | 1 | 3–6 | 25 |
 
-**Chỗ ngồi: hai bên bờ và chiếu giữa.** Hồ câu ở giữa màn hình. Cần thủ ngồi dọc **bờ trái**, **bờ phải** và **chiếu giữa** trước mặt hồ (bờ gần, giữa màn hình, `fishing.frontSeats` ghế, mặc định 5, to và nổi bật hơn). Chiếu giữa dành cho người **tặng quà nhiều nhất trong phiên**, hoà thì người **câu lâu nhất** (`fishingMs`). Server tính lại mỗi chu kỳ và gán `RosterMember.seat = 'front' | 'left' | 'right'`; người còn lại chia đều hai bên, ổn định theo hash ID nên không nhảy chỗ. Overlay chỉ hiển thị theo `seat`. Bố cục chừa các vùng giao diện TikTok che trên điện thoại (mép trên ~220 px, mép dưới ~380 px, mép phải ~140 px).
+**Chỗ ngồi: hai bên bờ và Bến Vàng.** Hồ câu ở giữa màn hình. Cần thủ ngồi dọc **bờ trái**, **bờ phải** và **Bến Vàng** trước mặt hồ (bờ gần, giữa màn hình, `fishing.frontSeats` ghế, mặc định 5, to và nổi bật hơn). Bến Vàng dành cho người **tặng quà nhiều nhất trong phiên**, hoà thì người **câu lâu nhất** (`fishingMs`). Server tính lại mỗi chu kỳ và gán `RosterMember.seat = 'front' | 'left' | 'right'`; người còn lại chia đều hai bên, ổn định theo hash ID nên không nhảy chỗ. Overlay chỉ hiển thị theo `seat`. Bố cục chừa các vùng giao diện TikTok che trên điện thoại (mép trên ~220 px, mép dưới ~380 px, mép phải ~140 px).
 
 **Tặng quà = kéo cá to ngay.** Người tặng quà được kéo một con cá to, loài cá theo **giá trị** quà: tổng giá trị = kim cương của một món × số lượng (sau khi gộp combo). Server bốc cân trong khoảng `ActionConfig.fish` rồi gửi `RunningAction.fish = { emoji, name, kg }`; số kg cộng vào người đó. Hiệu ứng: cần cong vút, dây căng rung, nước xoáy, bọt tung, rung màn hình, cá nhảy khỏi mặt nước xoay vòng, băng rôn tên + cân nặng giữa màn hình, pháo hoa, cả hồ cổ vũ. Bậc càng cao, hiệu ứng càng dài và lớn. Hành động chạy **lần lượt từng cái một** (`maxConcurrent = 1`): cái trước diễn xong thì cái sau (đang chờ trong hàng đợi) mới bắt đầu.
 
@@ -45,9 +45,9 @@ Thiết kế chi tiết: `docs/fishing-design.md`.
   2. không có thì xét các bậc **giftId 0**, chọn bậc có `minDiamonds` cao nhất mà vẫn ≤ tổng giá trị (hoà thì `minCount` cao hơn thắng);
   3. nền tảng không gửi giá trị (0 kim cương) → lấy bậc thấp nhất. Giá trị thấp hơn mọi bậc thì không kích hoạt gì.
 - **Quà luôn được chạy:** cooldown toàn cục và theo người mặc định là 0, quà không bị chặn bởi giới hạn follow, nhưng vẫn xếp hàng đợi (ưu tiên cao hơn). Nút "Thử" trên dashboard cũng chạy được mọi hành động.
-- Mọi cấu hình (bật/tắt, cooldown, loài cá + khoảng cân, mapping quà + mốc kim cương, chu kỳ câu, bảng cá thường, số ghế chiếu giữa, mục tiêu tập thể) đều chỉnh được trên dashboard. Giá trị mặc định nằm ở `apps/server/src/config/defaults.ts` và chỉ được ghi vào DB ở lần chạy đầu tiên. Riêng danh sách hành động do code quy định: mỗi lần khởi động, server thêm hành động mới, xoá hành động đã bỏ và chuyển mapping quà của chúng sang hành động dự phòng.
+- Mọi cấu hình (bật/tắt, cooldown, loài cá + khoảng cân, mapping quà + mốc kim cương, chu kỳ câu, bảng cá thường, số ghế Bến Vàng, mục tiêu tập thể) đều chỉnh được trên dashboard. Giá trị mặc định nằm ở `apps/server/src/config/defaults.ts` và chỉ được ghi vào DB ở lần chạy đầu tiên. Riêng danh sách hành động do code quy định: mỗi lần khởi động, server thêm hành động mới, xoá hành động đã bỏ và chuyển mapping quà của chúng sang hành động dự phòng.
 
-**Cá to định kỳ.** Cứ `fishing.bigFishEveryMs` (mặc định 180000 = 3 phút; 0 = tắt) lại có **"CÁ TO XUẤT HIỆN!"**: server chọn ngẫu nhiên một người đang ngồi câu (người ở chiếu giữa có cơ hội gấp đôi) và chạy hành động `fishing.bigFishActionId` (mặc định `big_fish_event`). Snapshot có `nextBigFishAt` và tin `bigfish.next` để HUD đếm ngược.
+**Cá to định kỳ.** Cứ `fishing.bigFishEveryMs` (mặc định 180000 = 3 phút; 0 = tắt) lại có **"CÁ TO XUẤT HIỆN!"**: server chọn ngẫu nhiên một người đang ngồi câu (người ở Bến Vàng có cơ hội gấp đôi) và chạy hành động `fishing.bigFishActionId` (mặc định `big_fish_event`). Snapshot có `nextBigFishAt` và tin `bigfish.next` để HUD đếm ngược.
 
 **Sự kiện tập thể "Cả hồ kéo Cá Thần".** Mỗi bình luận hoặc hành động góp một phần vào mục tiêu (mặc định 100). Đủ mục tiêu thì chạy `grand_haul`: mọi cần thủ cùng kéo một sợi dây, lôi Cá Thần (200–400 kg) lên bờ; số kg chia đều cho người góp sức. Người tham gia nhận danh hiệu **Kẻ săn Cá Thần**.
 
@@ -195,7 +195,27 @@ bun run typecheck    # tsc cho shared, server, overlay, admin
 
 ## Tuân thủ chính sách TikTok LIVE
 
-TODO: bổ sung tóm tắt chính sách TikTok LIVE áp dụng cho trò chơi (đang tìm hiểu).
+Tóm tắt cập nhật ngày 04/11/2026. Trang chính thức [LIVE Monetization Guidelines](https://www.tiktok.com/live/creators/en-US/rules_and_guidance/live_monetization_guidelines) cần đăng nhập mới đọc được, nên các điểm dưới đây có phần lấy từ hướng dẫn của bên thứ ba. Trước buổi LIVE lớn nên đọc lại bản gốc.
+
+**Rủi ro chính và cách trò chơi đã xử lý:**
+
+| Rủi ro (theo TikTok) | Trong game |
+|---|---|
+| **Trò may rủi / cá cược** gắn với quà ("tặng quà để quay", rút thăm, xổ số) bị cấm | Quà cho **loài cá cố định theo bậc kim cương** và **cân cố định** (giữa khoảng, `fixedBigFish`). Không có tỉ lệ trúng khi người xem bỏ tiền. Yếu tố ngẫu nhiên chỉ có ở phần miễn phí: câu thường từ bình luận, cá to định kỳ (chọn đều trong người đang ngồi), cá chia cho cả hồ. |
+| **Giải thưởng giá trị thật** cho quà | Không có. Overlay luôn ghi "Điểm chỉ để vui, không quy đổi". |
+| **Gift baiting**: xin quà lặp lại, máy móc, gây áp lực, lừa người xem | Chữ trên màn hình trung tính, chỉ mô tả luật chơi ("Mỗi quà = một loài cá cố định"). Không có lời nhắc tặng quà tự động; lời nhắc follow cũng không nhắc tới quà. |
+| **LIVE thụ động / không người trông / tự động hoá** (treo máy, chỉ chạy công cụ bên thứ ba, màn hình tĩnh hoặc lặp lại) | Game chỉ là phần phụ trợ. **Chủ phòng phải có mặt** (cam/mic, đọc bình luận, dẫn chuyện). Rời máy thì bấm **Pause LIVE** trên TikTok và **Dừng game** ở dashboard (overlay hiện "Hồ câu đang tạm dừng"). |
+| **Dữ liệu giả** trộn với người xem thật | Demo bị khoá khi đang kết nối TikTok thật, và luôn có dải DEMO nằm dưới thanh TikTok. |
+| Tên / bình luận phản cảm hiện lên màn hình | Mọi tên và bình luận hiển thị đều đi qua bộ lọc từ. Admin có thể mời người rời hồ. |
+| **Nhạc có bản quyền** | Overlay không phát nhạc. Nhạc nền chỉ lấy từ thư viện nhạc LIVE của TikTok hoặc nguồn có giấy phép. |
+| **Tuổi** | Phải đủ 18 tuổi mới LIVE nhận quà. Không để trẻ vị thành niên lên hình một mình. |
+
+**Khi vận hành:**
+
+- Không treo LIVE nhiều giờ chỉ có hồ câu tự chạy. Xen kẽ trò chuyện, đọc tên người lên cá, thỉnh thoảng đổi nội dung.
+- Không ghi cách tặng quà vào tiêu đề hay mô tả LIVE. Không đưa mã QR hay tên nền tảng khác lên màn hình.
+- Không hứa thưởng ngoài game (tiền, quà thật, "top quà được …") để đổi lấy quà.
+- Bị hạn chế thì vào **Account Status** xem chính sách bị nêu, và kháng nghị ngay (thường không kháng nghị được sau khi LIVE kết thúc). Vi phạm lặp lại trong 90 ngày sẽ bị phạt nặng hơn.
 
 ## Bảo mật
 

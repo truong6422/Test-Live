@@ -3,6 +3,8 @@ import type { GameConfig, GiftMapping, HistoryEntry } from '@cau/shared';
 import { api } from '../api';
 import type { Run } from '../App';
 import { FishThumb } from '../components/FishSprite';
+import { useBusy } from '../hooks';
+import { FIXED_GIFT_HINT, fmtKgVi, giftKg } from '../fishWeight';
 
 export function GiftsPage({
   config,
@@ -16,7 +18,10 @@ export function GiftsPage({
   liveHistory: HistoryEntry[];
 }) {
   const [rows, setRows] = useState<GiftMapping[]>(config.gifts);
-  useEffect(() => setRows(config.gifts), [config.gifts]);
+  // So theo NỘI DUNG (không theo tham chiếu): reloadConfig sau khi lưu trang khác tạo object mới → không được xoá phần đang sửa dở ở trang này.
+  const savedKey = JSON.stringify(config.gifts);
+  useEffect(() => setRows(config.gifts), [savedKey]);
+  const dirty = JSON.stringify(rows) !== savedKey;
 
   const tiers = rows.filter((g) => g.giftId === 0 && g.enabled).sort((a, b) => (a.minDiamonds ?? 0) - (b.minDiamonds ?? 0));
 
@@ -28,7 +33,7 @@ export function GiftsPage({
       <span className="fish-cell">
         <FishThumb actionId={a.id} name={a.fish.name} emoji={a.fish.emoji} size={size} />
         <span>
-          {a.fish.name} <span className="muted">{a.fish.minKg}–{a.fish.maxKg} kg</span>
+          {a.fish.name} <span className="kg">cố định {fmtKgVi(giftKg(a.fish))} kg</span>
         </span>
       </span>
     );
@@ -43,15 +48,20 @@ export function GiftsPage({
       const match = h.summary.match(/Tặng \d+x (.+?) \(id (\d+)[,)]/);
       if (match) m.set(match[2]!, match[1]!);
     }
-    return [...m.entries()];
-  }, [liveHistory]);
+    return [...m.entries()].filter(([id]) => !rows.some((r) => r.giftId === Number(id)));
+  }, [liveHistory, rows]);
+  const { busy, wrap } = useBusy();
 
   return (
     <div className="stack">
-      <h1>Bậc quà tặng</h1>
+      <h1>Bảng quà</h1>
       <p className="muted">
         Tặng quà là <b>kéo cá to</b> ngay — quà càng giá trị, cá càng to. Bậc chọn theo giá trị quà: tổng giá trị = kim cương của một món × số lượng (đã gộp combo).
       </p>
+      <div className="alert info">
+        <b>Quà: loài cá và cân đều cố định</b> (cân = giữa khoảng kg của hành động, làm tròn 0,1 kg; sửa ở tab <b>Cá to (quà)</b>).{' '}
+        {FIXED_GIFT_HINT}
+      </div>
       <p className="muted">
         Cách chọn: dòng có <b>đúng Gift ID</b> thắng trước; không có thì xét các bậc Gift ID <b>0</b> (mọi quà khác) và chọn bậc có "Từ (kim
         cương)" cao nhất mà vẫn ≤ tổng giá trị. Không rõ giá trị (0 kim cương) thì lấy bậc thấp nhất. Dòng phải đang bật và "Số lượng tối
@@ -71,6 +81,7 @@ export function GiftsPage({
         </section>
       )}
       <section className="card">
+        <div className="table-scroll">
         <table>
           <thead>
             <tr>
@@ -79,7 +90,7 @@ export function GiftsPage({
               <th>Hành động</th>
               <th>Số lượng tối thiểu</th>
               <th>Từ (kim cương)</th>
-              <th>Cá to kéo được</th>
+              <th>Cá to kéo được (cân cố định)</th>
               <th>Bật</th>
               <th />
             </tr>
@@ -126,6 +137,7 @@ export function GiftsPage({
             ))}
           </tbody>
         </table>
+        </div>
         <div className="row">
           <button
             onClick={() =>
@@ -134,7 +146,25 @@ export function GiftsPage({
           >
             + Thêm dòng
           </button>
-          <button className="primary" onClick={() => run(() => api.updateGifts(rows).then(reloadConfig), 'Đã lưu mapping quà')}>
+          <span className="spacer" />
+          {dirty && <span className="pill yellow">Chưa lưu</span>}
+          <button className="ghost" disabled={!dirty || busy} onClick={() => setRows(config.gifts)}>
+            Hoàn tác
+          </button>
+          <button
+            className="primary"
+            disabled={!dirty || busy}
+            onClick={wrap(async () => {
+              const bad = rows.findIndex(
+                (g) => !Number.isInteger(g.giftId) || g.giftId < 0 || !Number.isInteger(g.minCount) || g.minCount < 1 || !g.giftName.trim()
+              );
+              if (bad >= 0) {
+                await run(() => Promise.reject(new Error(`Dòng ${bad + 1}: Gift ID là số nguyên ≥ 0, số lượng tối thiểu ≥ 1, tên quà không trống`)));
+                return;
+              }
+              await run(() => api.updateGifts(rows).then(reloadConfig), 'Đã lưu bảng quà');
+            })}
+          >
             Lưu tất cả
           </button>
         </div>

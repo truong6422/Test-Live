@@ -1,7 +1,7 @@
 import type { CollectiveState, GameConfig, HistoryEntry } from '@cau/shared';
 import { defaultGameConfig, reconcileConfig } from '../config/defaults';
-import type { PlayerRecord } from '../players/players';
-import type { GameStore, HistoryQuery } from './store';
+import type { PlayerRecord, SessionStat } from '../players/players';
+import type { GameStore, HistoryQuery, RuntimeState } from './store';
 
 /** Lưu trong bộ nhớ — cho test và chạy thử không cần PostgreSQL. */
 export class MemoryStore implements GameStore {
@@ -10,6 +10,8 @@ export class MemoryStore implements GameStore {
   sessions = new Map<string, { endedAt: number | null }>();
   history: HistoryEntry[] = [];
   collectives = new Map<string, CollectiveState>();
+  sessionStats = new Map<string, Map<string, SessionStat>>();
+  runtime: RuntimeState | null = null;
 
   async init(defaults: GameConfig): Promise<void> {
     if (!this.config) {
@@ -32,8 +34,25 @@ export class MemoryStore implements GameStore {
   async loadPlayers(): Promise<PlayerRecord[]> {
     return [...this.players.values()].map((p) => structuredClone(p));
   }
-  async savePlayers(_sessionId: string | null, batch: { player: PlayerRecord }[]): Promise<void> {
-    for (const { player } of batch) this.players.set(player.platformId, structuredClone(player));
+  async savePlayers(sessionId: string | null, batch: { player: PlayerRecord; session?: SessionStat | undefined }[]): Promise<void> {
+    for (const { player, session } of batch) {
+      this.players.set(player.platformId, structuredClone(player));
+      // Giống bảng session_players: upsert giá trị TUYỆT ĐỐI của phiên.
+      if (sessionId && session) {
+        let m = this.sessionStats.get(sessionId);
+        if (!m) this.sessionStats.set(sessionId, (m = new Map()));
+        m.set(player.platformId, { ...session });
+      }
+    }
+  }
+  async loadSessionStats(sessionId: string): Promise<{ playerId: string; stat: SessionStat }[]> {
+    return [...(this.sessionStats.get(sessionId) ?? new Map<string, SessionStat>()).entries()].map(([playerId, stat]) => ({ playerId, stat: { ...stat } }));
+  }
+  async loadRuntime(): Promise<RuntimeState | null> {
+    return this.runtime ? { ...this.runtime } : null;
+  }
+  async saveRuntime(state: RuntimeState): Promise<void> {
+    this.runtime = { ...state };
   }
   async startSession(id: string): Promise<void> {
     this.sessions.set(id, { endedAt: null });

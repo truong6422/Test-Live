@@ -79,6 +79,17 @@ export class ActionQueue<T = unknown> {
     return expired;
   }
 
+  /** Gỡ mọi mục thoả điều kiện, trả về các mục đã gỡ. */
+  removeWhere(pred: (it: QueueItem<T>) => boolean): QueueItem<T>[] {
+    const removed: QueueItem<T>[] = [];
+    this.items = this.items.filter((it) => {
+      if (!pred(it)) return true;
+      removed.push(it);
+      return false;
+    });
+    return removed;
+  }
+
   /** Các mục đang chờ (bản sao, chỉ đọc). */
   pending(): readonly QueueItem<T>[] {
     return [...this.items];

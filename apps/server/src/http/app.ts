@@ -18,6 +18,8 @@ import {
   workTasksSchema
 } from '@cau/shared';
 import type { Env } from '../config/env';
+import { DEMO_PROFILES } from '../connectors/demo/demo-connector';
+import { UnknownActionError } from '../engine/engine';
 import { TokenBucket } from '../engine/rate-limit';
 import type { Logger } from '../logger';
 import { ConflictError, NotFoundError, ValidationError, type GameService } from '../service';
@@ -45,9 +47,13 @@ export function createApp({ service, env, logger }: AppDeps): Hono {
     if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
     if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
     if (err instanceof ConflictError) return c.json({ error: err.message }, 409);
+    if (err instanceof UnknownActionError) return c.json({ error: err.message }, 404);
     if (err instanceof z.ZodError) return c.json({ error: 'Dữ liệu không hợp lệ', issues: err.issues }, 400);
+    // Body không phải JSON hợp lệ (c.req.json / JSON.parse) → 400, không phải 500.
+    if (err instanceof SyntaxError) return c.json({ error: 'JSON không hợp lệ' }, 400);
     log.error('Lỗi xử lý request', { err, path: c.req.path });
-    return c.json({ error: err.message || 'Lỗi máy chủ' }, 500);
+    // Không trả chi tiết lỗi nội bộ (chuỗi kết nối DB, đường dẫn…) ra client; chi tiết đã nằm trong log.
+    return c.json({ error: 'Lỗi máy chủ' }, 500);
   });
 
   // --------------------------------------------------------------------------
@@ -134,8 +140,11 @@ export function createApp({ service, env, logger }: AppDeps): Hono {
     await service.disconnectTikTok();
     return c.json(service.connectorInfo());
   });
-  api.post('/demo/start', (c) => {
-    service.setDemo(true);
+  api.post('/demo/start', async (c) => {
+    // body tuỳ chọn { profile: 'live' } = giả lập giống phiên LIVE thật; mặc định 'busy' (dồn dập để thử hoạt ảnh)
+    // Body rỗng = mặc định; profile lạ → 400 (không âm thầm chạy profile khác với admin chọn).
+    const { profile } = z.object({ profile: z.enum(DEMO_PROFILES).optional() }).parse(await readJson(c));
+    service.setDemo(true, profile ?? 'busy');
     return c.json(service.connectorInfo());
   });
   api.post('/demo/stop', (c) => {
@@ -160,7 +169,7 @@ export function createApp({ service, env, logger }: AppDeps): Hono {
     return c.json(service.getConfig().gifts);
   });
 
-  // Câu tự động (chu kỳ, bảng cá, cá to định kỳ, ghế chiếu giữa, rời hồ)
+  // Câu tự động (chu kỳ, bảng cá, cá to định kỳ, ghế Bến Vàng, rời hồ)
   api.get('/fishing', (c) => c.json(service.getConfig().fishing));
   api.put('/fishing', async (c) => {
     await service.updateFishing(fishingUpdateSchema.parse(await c.req.json()));

@@ -71,6 +71,8 @@ export const fishingUpdateSchema = z
   .object({
     tickMs: z.number().int().min(1000).max(600_000),
     catchesPerTick: z.number().int().min(1).max(50),
+    targetCatchMs: z.number().int().min(1000).max(3600_000),
+    maxCatchesPerTick: z.number().int().min(1).max(50),
     bigFishShadowMs: z.number().int().min(0).max(120_000),
     loot: z.array(lootItemSchema).min(1).max(40),
     bigFishEveryMs: z.number().int().min(0).max(24 * 3600_000),

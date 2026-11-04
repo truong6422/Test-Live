@@ -116,8 +116,15 @@ export interface FishingConfig {
    * LẦN LƯỢT theo thứ tự người vào hồ (xoay vòng: hết lượt người cuối thì quay lại người đầu).
    */
   tickMs: number;
-  /** Số cá thường lên mỗi chu kỳ (mặc định 1). */
+  /**
+   * Số cá thường TỐI THIỂU mỗi chu kỳ (mặc định 1). Số thực tế tự tăng theo số người ngồi:
+   * clamp(ceil(N × tickMs / targetCatchMs), catchesPerTick, maxCatchesPerTick), không quá N.
+   */
   catchesPerTick: number;
+  /** Mục tiêu: mỗi người ngồi được một con cá thường sau khoảng này (ms, mặc định 30000). Thiếu = mặc định. */
+  targetCatchMs?: number;
+  /** Trần số cá thường mỗi chu kỳ (mặc định 8). Thiếu = mặc định. */
+  maxCatchesPerTick?: number;
   /** Bảng cá thường; loài + cân bốc ngẫu nhiên cho người tới lượt. */
   loot: LootItem[];
   /**
@@ -129,7 +136,7 @@ export interface FishingConfig {
   bigFishShadowMs: number;
   /** Hành động chạy khi cá to định kỳ xuất hiện. */
   bigFishActionId: string;
-  /** Số ghế "chiếu giữa" trước mặt hồ dành cho người tặng quà nhiều / câu lâu nhất. */
+  /** Số ghế "Bến Vàng" trước mặt hồ dành cho người tặng quà nhiều / câu lâu nhất. */
   frontSeats: number;
   /** Không bình luận/tặng quà quá lâu thì rời hồ (0 = không bao giờ). */
   idleKickMs: number;
@@ -342,7 +349,7 @@ export interface FeedItem {
  * - rookie: Cần thủ tập sự (mặc định)
  * - angler: Cần thủ chăm chỉ (câu nhiều)
  * - big_catch: Sát thủ cá to (từng câu được cá nặng)
- * - troll: Kẻ phá hồ (tặng quà quậy nhiều)
+ * - troll: Kẻ phá hồ (≥ 30 lượt việc vui bằng bình luận — KHÔNG tính quà)
  * - king_hunter: Kẻ săn Cá Thần (góp sức kéo Cá Thần)
  */
 export interface PlayerTitle {
@@ -371,7 +378,7 @@ export interface RosterMember {
   /** Đã follow → cần thủ chính thức (đội nón); chưa → cần thủ tập sự. */
   follower: boolean;
   points: number;
-  /** 'front' = chiếu giữa trước mặt hồ (top quà / câu lâu), 'left' | 'right' = hai bên bờ. Server quyết định. */
+  /** 'front' = Bến Vàng trước mặt hồ (top quà / câu lâu), 'left' | 'right' = hai bên bờ. Server quyết định. */
   seat: 'front' | 'left' | 'right';
   /** Tổng cân cá đã câu trong phiên (kg, 1 chữ số thập phân). */
   kg: number;
@@ -440,6 +447,11 @@ export interface ConnectorInfo {
 
 export interface GameSnapshot {
   running: boolean;
+  /**
+   * TikTok báo LIVE đã kết thúc / kênh chưa phát: câu tự động, cá to định kỳ và sự kiện tập thể tạm dừng
+   * (game vẫn `running`). Thiếu = false (server cũ).
+   */
+  streamOffline?: boolean;
   sessionId: string | null;
   king: KingState;
   runningActions: RunningAction[];
@@ -478,7 +490,7 @@ export type ServerMessage =
   | { type: 'chat'; data: ChatEvent }
   | { type: 'collective'; data: CollectiveState | null }
   | { type: 'connectors'; data: ConnectorInfo }
-  | { type: 'game'; data: { running: boolean; sessionId: string | null } }
+  | { type: 'game'; data: { running: boolean; sessionId: string | null; streamOffline?: boolean } }
   | { type: 'history'; data: HistoryEntry }
   | { type: 'queue'; data: { length: number } };
 
